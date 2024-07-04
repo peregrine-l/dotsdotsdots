@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "amiga-assembly",
+            "request": "launch",
+            "name": "FS-UAE Debug",
+            "stopOnEntry": false,
+            "program": "${workspaceFolder}/uae/dh0/dots",
+            "remoteProgram": "SYS:dots",
+            "emulatorType": "fs-uae",
+            "emulatorArgs": [
+                "--amiga_model=A500",
+                "--kickstart_file=C:/Users/Peregrine/Amiga/UAE Data/Kickstarts/Kickstart-1.3-34.5.rom",
+                "--hard_drive_0=${workspaceFolder}/uae/dh0",
+                "--automatic_input_grab=0"
+            ],
+            "preLaunchTask": "amigaassembly: build"
+        }
+    ]
+}
