@@ -4,7 +4,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;; BEGIN Constants ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; exec.library
-;SysBase				    EQU	4	           ;pointer to exec.library
+SysBase				    EQU	4	           ;pointer to exec.library
 MEMF_CHIP				EQU	1<<1	       ;AllocMem(): mask for Chip RAM
 MEMF_ANY				EQU	0	           ;AllocMem(): mask for data
 MEMF_CLEAR				EQU	1<<16	       ;AllocMem(): mask for init w/ 0s
@@ -20,10 +20,10 @@ gb_copinit				EQU	38	           ;offset to ptr to current copperlist
 ;;;;;;;;;;;;;;;;;;;;;;; END Constants ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;; BEGIN Macros ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; CALLSYS         MACRO          ;CALLSYS <library base>,<library routine offset>
-; 	movea.l		\1,a6
-; 	jsr			_LVO\2(a6)
-; 	ENDM
+CALLSYS         MACRO          ;CALLSYS <library base>,<library routine offset>
+ 	movea.l		\1,a6
+ 	jsr			_LVO\2(a6)
+ 	ENDM
 
                 ;use JUMPSYS if the library base is already in a6
 JUMPSYS         MACRO                         ;JUMPSYS <library routine offset>

@@ -16,6 +16,24 @@
                 "--automatic_input_grab=0"
             ],
             "preLaunchTask": "amigaassembly: build"
+        },
+        {
+            "type": "amiga-assembly",
+            "request": "launch",
+            "name": "WinUAE Debug",
+            "stopOnEntry": true,
+            "program": "${workspaceFolder}/uae/dh0/dots",
+            "remoteProgram": "SYS:dots",
+            "emulatorType": "winuae",
+            "emulatorArgs": [
+                "-s",
+                "--amiga_model=A500",
+                //"-s",
+                //"--kickstart_file=C:/Users/Peregrine/Amiga/UAE Data/Kickstarts/Kickstart-1.3-34.5.rom",
+                "-s",
+                "filesystem=rw,dh0:${workspaceFolder}/uae/dh0",
+            ],
+            "preLaunchTask": "amigaassembly: build"
         }
     ]
 }

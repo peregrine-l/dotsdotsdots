@@ -58,13 +58,13 @@ SystemCleanup:      moveq   #5,d0
 ;;;;;;;;;;;;;;;;;;; BEGIN INTERRUPT HANDLERS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
                     SECTION main.interrupts,CODE_P
                     CNOP    0,4
-VBlankIntHandler:   ;movem.l d1-d7/a2-a6,-(sp)            ;will return a0 and d0
-                    add.l   #1,(a1)                              ;FrameCount++
-                    bset.b  #VBFlag,4(a1)             ;set VBFlag bit of Flags
+VBlankIntHandler:   movem.l d1-d7/a2-a6,-(sp)       ;sets a1 and returns a0, d0
+                    add.l   #1,(a1)                               ;FrameCount++
+                    bset.b  #VBFlag,4(a1)              ;set VBFlag bit of Flags
                     lea     CUSTOM,a0
                     move.w  #VERTB,INTREQ(a0)             ;clear interrupt flag
                     move.w  #VERTB,INTREQ(a0)         ;twice for compatibility?
-                    ;movem.l (sp)+,d1-d7/a2-a6
+                    movem.l (sp)+,d1-d7/a2-a6
                     moveq   #0,d0
                     rts
 ;;;;;;;;;;;;;;;;;;; END INTERRUPT HANDLERS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -80,6 +80,7 @@ ErrNo               dc.b    0
                     CNOP    0,2
 OldINTENA           ds.l    1
 OldINTREQ           ds.l    1
+OldIntVector        ds.l    1                        ;for SetIntVector approach
                     ;long-length
                     CNOP    0,4
                     ;mixed-length (structs)
@@ -89,9 +90,9 @@ FrameCount          dc.l    0
 Flags               dc.b    0
                     ;AmigaOS' interrupt struct
                     CNOP    0,4
-VBlankIntStruct     ds.l    1,1                         ;LN_SUCC,LN_PRED
+VBlankIntStruct     dc.l    0,0                           ;LN_SUCC,LN_PRED
                     dc.b    2                           ;LN_TYPE = NT_INTERRUPT
-                    dc.b    127                         ;LN_PRI to highest
+                    dc.b    100                         ;LN_PRI to highest
                     dc.l    VBlankIntName
                     dc.l    VBlankIntData
                     dc.l    VBlankIntHandler
