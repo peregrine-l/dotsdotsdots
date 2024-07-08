@@ -13,7 +13,8 @@
                 "--amiga_model=A500",
                 "--kickstart_file=C:/Users/Peregrine/Amiga/UAE Data/Kickstarts/Kickstart-1.3-34.5.rom",
                 "--hard_drive_0=${workspaceFolder}/uae/dh0",
-                "--automatic_input_grab=0"
+                "--automatic_input_grab=0",
+                "--floppy_drive_volume=0"
             ],
             "preLaunchTask": "amigaassembly: build"
         },

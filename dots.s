@@ -1,9 +1,22 @@
                     INCDIR  "include"
                     INCLUDE "hardware.i"
                     INCLUDE "system.i"
-                    INCLUDe "dos/dosextens.i"
+                    INCLUDE "dos/dosextens.i"
 
 ;;;;;;;;;;;;;;;;;;; BEGIN SYMBOLIC CONSTANTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+Width               EQU     320
+Height              EQU     256
+Depth               EQU     1
+BitplaneSize        EQU     (Width*Height/8)
+PlayfieldSize       EQU     (BitplaneSize*Depth)
+XStart              EQU     $81
+XStop               EQU     (XStart+Width)
+YStart              EQU     $2c
+YStop               EQU     (YStart+Height)
+OurDIWSTRT          EQU     ((YStart<<8)|XStart)
+OurDIWSTOP          EQU     (((YStop-256)<<8)|(XStop-256))
+OurDDFSTRT          EQU     $38
+OurDDFSTOP          EQU     $d0
 VBFlag              EQU     0
 ;;;;;;;;;;;;;;;;;;; END SYMBOLIC CONSTANTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -14,13 +27,37 @@ RESTORE_CTRL_REGS   MACRO ;RESTORE_CTRL_REGS <hardware control register>
                     ori.w   #$8000,d0                      ;enable restored reg
                     move.w  d0,\1(a5)
                     ENDM
+CWAITD7             MACRO ;CWAITD7 <#h>,<>,<aX CL ptr> [4 bytes]
+                    lsl.l   #8,d7
+                    ori.w   #\1,d7
+                    ori.w   #1,d7
+                    move.w  d7,(\3)+
+                    move.w  #$fffe,(\3)+
+                    ENDM
+CWAITI              MACRO ;CWAITI <#h>,<#val>,<aX CL ptr> [4 bytes]
+                    move.l  #\2,d7
+                    CWAITD7 \1,\2,\3
+                    ENDM
+CMOVEI              MACRO ;CMOVEI <#value>,<#register>,<aX CL ptr> [4 bytes]
+                    move.w  #\2,(\3)+
+                    move.w  #\1,(\3)+
+                    ENDM
+CMOVEP              MACRO ;CMOVEPTR <ptr>,<#reg name+num>,<aX CL ptr> [8 bytes]
+                    move.l  \1,d7
+                    move.w  #\2PTL,(\3)+
+                    move.w  d7,(\3)+
+                    swap    d7
+                    move.w  #\2PTH,(\3)+
+                    move.w  d7,(\3)+
+                    ENDM
 ;;;;;;;;;;;;;;;;;;; END MACROS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN MAIN ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
                     SECTION main.code,CODE_P
                     CNOP    0,4
 Start:              movem.l d1-d7/a0-a6,-(sp)
-Setup:              bsr     SystemSetup
+Setup:              bsr.w   SystemSetup
+                    bsr.w   Init
 .mainLoop:          btst.b  #VBFlag,Flags
                     beq.s   .mainLoop
                     ;do stuff here
@@ -69,6 +106,7 @@ PALTest             cmpi.b  #50,VBlankFrequency(a6)               ;a6 = SysBase
                     bra.w   PALError
 FlushView           move.l  GfxLibBase,a6
                     move.l  gb_ActiView(a6),OldView
+                    move.l  gb_LOFlist(A6),OldCopperlist
 .loop               suba.l  a1,a1
                     JUMPSYS LoadView
                     JUMPSYS WaitTOF
@@ -94,10 +132,10 @@ RestoreHWCtrlRegs:  RESTORE_CTRL_REGS DMACON
 FreeBlitter:        CALLSYS GfxLibBase,WaitBlit
                     JUMPSYS DisownBlitter
 RestoreView:        move.l  OldView,a1
-                    JUMPSYS LoadView
-                    JUMPSYS WaitTOF
-                    JUMPSYS WaitTOF
+                    move.l  OldCopperlist,gb_LOFlist(a6)
                     move.l  gb_copinit(a6),COP1LC(a5)
+                    move.w  #0,COPJMP1(a5)
+                    JUMPSYS LoadView
 PALError:
 CloseGfxLibrary:    move.l  GfxLibBase,a1
                     CALLSYS SysBase,CloseLibrary
@@ -112,6 +150,51 @@ CalledFromWB:       tst.l   WBMessage
                     JUMPSYS ReplyMsg                 ;automatically restarts OS
 .exit               rts
 ;;;;;;;;;;;;;;;;;;; END SYSTEM CLEANUP ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+Init:               lea     CUSTOM,a5                       ;maybe useless here
+Colors:             move.w  #$000,COLOR00(a5)
+                    move.w  #$fff,COLOR01(a5)
+MakeCopperlist:     move.l  #Copperlist,a0
+                    move.l  #Bitplane,a1
+                    CMOVEP  a1,BPL1,a0
+                    CWAITI  $07,YStart,a0
+                    CMOVEI  $136,COLOR00,a0          
+                    CWAITI  $ff,$ff,a0                ;end of copperlist, twice
+                    CWAITI  $ff,$ff,a0
+SysConfig:          move.w  #(CUSTOMCLR|COPEN|BPLEN|BLTEN|SPREN),DMACON(a5)
+                    move.w  #(BPU0|COLOR),BPLCON0(a5)
+					move.w	#0,BPLCON3(a5)		                    ;no AGA/ECS
+					move.w	#0,FMODE(a5)                            ;ditto
+					move.w	#0,BPL1MOD(a5)
+					move.w	#0,BPL2MOD(a5)
+                    move.w	#OurDIWSTRT,DIWSTRT(a5)
+					move.w	#OurDIWSTOP,DIWSTOP(a5)
+					move.w	#OurDDFSTRT,DDFSTRT(a5)
+					move.w	#OurDDFSTOP,DDFSTOP(a5)
+                    move.w	#(CUSTOMSET|DMAEN|COPEN|BPLEN|BLTEN),DMACON(a5)
+					move.w	#(CUSTOMSET|INTEN|VERTB),INTENA(a5)
+                    lea     Bitplane,a0
+                    bsr.s   ClearBitplane
+                    CALLSYS GfxLibBase,WaitTOF
+                    JUMPSYS WaitTOF  
+                    move.l	#Copperlist,COP1LC(a5)
+					move.l	#0,COPJMP1(a5)
+                    rts
+;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;; BEGIN CLEAR BITPLANE ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ClearBitplane:      ;a0: bitplane address
+                    lea     CUSTOM,a5
+                    btst    #14,DMACONR(a5) ;wait for the Blitter, twice
+.waitBlitterA       btst    #14,DMACONR(a5)
+                    bne.s   .waitBlitterA
+                    move.l  #USED<<16,BLTCON0(a5) ;clear mode
+                    clr.w   BLTDMOD(a5)
+                    move.l  a0,BLTDPTH(a5)
+                    move.w  #((Height<<6)|(Width/16)),BLTSIZE(a5) ;width: words
+                    rts
+;;;;;;;;;;;;;;;;;;; END CLEAR BITPLANE ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN INTERRUPT HANDLERS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
                     SECTION main.interrupts,CODE_P
@@ -146,6 +229,7 @@ OldADKCON           ds.l    1
 WBMessage           dc.l    0
 GfxLibBase          ds.l    1
 OldView             ds.l    1
+OldCopperlist       ds.l    1
                     ;mixed-length (structs)
                     CNOP    0,4
 VBlankIntData       ;data shared with interrupt handler
@@ -159,4 +243,9 @@ VBlankIntStruct     dc.l    0,0         ;LN_SUCC,LN_PRED, part of a linked list
                     dc.l    VBlankIntName
                     dc.l    VBlankIntData
                     dc.l    VBlankIntHandler
+
+                    SECTION main.chipdata,DATA_C
+                    CNOP    0,4
+Copperlist          ds.b    64                    ;should be enough for now
+Bitplane            ds.b    BitplaneSize
 ;;;;;;;;;;;;;;;;;;; END STATIC DATA ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

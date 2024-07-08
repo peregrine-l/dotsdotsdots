@@ -16,7 +16,8 @@ PowerSupplyFrequency	EQU	    531
 GFXF_AA_ALICE			EQU	    2	       ;bit set if AGA
 gb_ChipRevBits0			EQU	    $ec	       ;chip revision
 gb_ActiView				EQU	    34	       ;offset to ptr to current viewport
-gb_copinit				EQU	    38	       ;offset to ptr to current copperlist
+gb_copinit				EQU	    38	       ;
+gb_LOFlist              EQU     50         ;offset to ptr to current copperlist
 ;;;;;;;;;;;;;;;;;;;;;;; END SYMBOLIC CONSTANTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;;;;;; BEGIN MACROS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
