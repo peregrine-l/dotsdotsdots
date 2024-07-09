@@ -7,7 +7,7 @@
 4. Double buffering
 5. Mathematics
    1. Fixed point routines
-   2. Sinus table (included)
+   2. Sinus table (included) (calculated)
    3. Trigonometric functions
    4. Draw a circle, a flag in false 3D
 6. 3D

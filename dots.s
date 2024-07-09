@@ -4,15 +4,19 @@
                     INCLUDE "dos/dosextens.i"
 
 ;;;;;;;;;;;;;;;;;;; BEGIN SYMBOLIC CONSTANTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-Width               EQU     320
-Height              EQU     256
+BPWidth             EQU     320
+BPHeight            EQU     256
 Depth               EQU     1
-BitplaneSize        EQU     (Width*Height/8)
-PlayfieldSize       EQU     (BitplaneSize*Depth)
+BPSize              EQU     (BPWidth*BPHeight/8)
+PlayfieldSize       EQU     (BPSize*Depth)
+WWidth              EQU     256
+WHeight             EQU     256
+HOffset             EQU     ((BPWidth-WWidth)/2)
+VOffset             EQU     0
 XStart              EQU     $81
-XStop               EQU     (XStart+Width)
+XStop               EQU     (XStart+BPWidth)
 YStart              EQU     $2c
-YStop               EQU     (YStart+Height)
+YStop               EQU     (YStart+BPHeight)
 OurDIWSTRT          EQU     ((YStart<<8)|XStart)
 OurDIWSTOP          EQU     (((YStop-256)<<8)|(XStop-256))
 OurDDFSTRT          EQU     $38
@@ -60,7 +64,7 @@ Setup:              bsr.w   SystemSetup
                     bsr.w   Init
 .mainLoop:          btst.b  #VBFlag,Flags
                     beq.s   .mainLoop
-                    ;do stuff here
+                    jsr     DrawDots
                     bclr.b  #VBFlag,Flags
                     btst.b  #FIR0,CIAA+CIAAPRA               ;left mouse button
                     bne.s   .mainLoop
@@ -155,11 +159,12 @@ CalledFromWB:       tst.l   WBMessage
 Init:               lea     CUSTOM,a5                       ;maybe useless here
 Colors:             move.w  #$000,COLOR00(a5)
                     move.w  #$fff,COLOR01(a5)
+                    jsr     CalcMulTable
 MakeCopperlist:     move.l  #Copperlist,a0
                     move.l  #Bitplane,a1
                     CMOVEP  a1,BPL1,a0
                     CWAITI  $07,YStart,a0
-                    CMOVEI  $136,COLOR00,a0          
+                    CMOVEI  $000,COLOR00,a0          
                     CWAITI  $ff,$ff,a0                ;end of copperlist, twice
                     CWAITI  $ff,$ff,a0
 SysConfig:          move.w  #(CUSTOMCLR|COPEN|BPLEN|BLTEN|SPREN),DMACON(a5)
@@ -186,15 +191,50 @@ SysConfig:          move.w  #(CUSTOMCLR|COPEN|BPLEN|BLTEN|SPREN),DMACON(a5)
 ;;;;;;;;;;;;;;;;;;; BEGIN CLEAR BITPLANE ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ClearBitplane:      ;a0: bitplane address
                     lea     CUSTOM,a5
-                    btst    #14,DMACONR(a5) ;wait for the Blitter, twice
+                    btst    #14,DMACONR(a5)        ;wait for the Blitter, twice
 .waitBlitterA       btst    #14,DMACONR(a5)
                     bne.s   .waitBlitterA
-                    move.l  #USED<<16,BLTCON0(a5) ;clear mode
+                    move.l  #USED<<16,BLTCON0(a5)  ;clear mode
                     clr.w   BLTDMOD(a5)
                     move.l  a0,BLTDPTH(a5)
-                    move.w  #((Height<<6)|(Width/16)),BLTSIZE(a5) ;width: words
+                    move.w  #((BPHeight<<6)|(BPWidth/16)),BLTSIZE(a5) ;in words
                     rts
 ;;;;;;;;;;;;;;;;;;; END CLEAR BITPLANE ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;; BEGIN PLOTDOT ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+CalcMulTable:       lea     PlotDotMulTable,a0
+                    ;move.l  #((VOffset*BPWidth+HOffset)/8),d0
+                    move.l  #0,d0
+                    move.l  #(BPHeight-1),d7
+.loop               move.w  d0,(a0)+
+                    addi.w  #(BPWidth/8),d0               ;so, it's a x40 table
+                    dbf     d7,.loop
+                    rts
+
+PlotDot:            ;d0: X, d1: Y, a0: multiplication table, a1: bitplane
+                    move.l  d0,d2
+                    lsr.w   #3,d0        ;d0 <- X/8, offset byte
+                    add.w   d1,d1        ;68000 doesn't support (a0,d1.w*2)
+                    add.w   (a0,d1.w),d0 ;d0 <- X/8 + (Width/8) * Y + 
+                                         ; ((VOffset * Width + HOffset)/8)
+                    not.b   d2           ;endianness complement to start
+                                         ;from low address
+                    bset.b  d2,(a1,d0)
+                    rts              ;Gloky suggests jmp(aX) instead of jsr/rts
+
+DrawDots:           lea     PlotDotMulTable,a0
+                    lea     Bitplane,a1
+                    move.l  #(BPHeight-1),d7
+.loopY              move.l  #(BPWidth-1),d6
+.loopX              move.l  d6,d0
+                    move.l  d7,d1
+                    jsr     PlotDot
+                    subq    #3,d6
+                    dbf     d6,.loopX
+                    subq    #3,d7
+                    dbf     d7,.loopY
+                    rts                    
+;;;;;;;;;;;;;;;;;;; END PLOTDOT ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN INTERRUPT HANDLERS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
                     SECTION main.interrupts,CODE_P
@@ -224,6 +264,7 @@ OldDMACON           ds.l    1
 OldINTENA           ds.l    1
 OldINTREQ           ds.l    1
 OldADKCON           ds.l    1
+PlotDotMulTable     ds.w    (2*BPHeight)
                     ;long-length
                     CNOP    0,4
 WBMessage           dc.l    0
@@ -246,6 +287,6 @@ VBlankIntStruct     dc.l    0,0         ;LN_SUCC,LN_PRED, part of a linked list
 
                     SECTION main.chipdata,DATA_C
                     CNOP    0,4
-Copperlist          ds.b    64                    ;should be enough for now
-Bitplane            ds.b    BitplaneSize
+Copperlist          ds.b    128                       ;should be enough for now
+Bitplane            ds.b    BPSize
 ;;;;;;;;;;;;;;;;;;; END STATIC DATA ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
