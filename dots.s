@@ -9,10 +9,10 @@ BPHeight            EQU     256
 Depth               EQU     1
 BPSize              EQU     (BPWidth*BPHeight/8)
 PlayfieldSize       EQU     (BPSize*Depth)
-WWidth              EQU     256
-WHeight             EQU     256
+WWidth              EQU     128
+WHeight             EQU     128
 HOffset             EQU     ((BPWidth-WWidth)/2)
-VOffset             EQU     0
+VOffset             EQU     ((BPHeight-WHeight)/2)
 XStart              EQU     $81
 XStop               EQU     (XStart+BPWidth)
 YStart              EQU     $2c
@@ -65,14 +65,25 @@ Setup:              bsr.w   SystemSetup
 .mainLoop:          btst.b  #VBFlag,Flags
                     beq.s   .mainLoop
                     jsr     DrawDots
+                    jsr     SwapBuffers
                     bclr.b  #VBFlag,Flags
-                    btst.b  #FIR0,CIAA+CIAAPRA               ;left mouse button
+                    btst	#10,POTINP+CUSTOM               ;right mouse button
                     bne.s   .mainLoop
 Cleanup:            bsr     SystemCleanup
 Exit:               movem.l (sp)+,d1-d7/a0-a6
                     move.b  ErrNo,d0
                     rts
 ;;;;;;;;;;;;;;;;;;; END MAIN ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;; BEGIN DOUBLE BUFFERING ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+SwapBuffers:        move.l  DrawPF,d0
+                    move.l  ViewPF,d1
+                    move.l  d1,DrawPF
+                    move.l  d0,ViewPF
+                    move.l  #Copperlist,a0
+                    CMOVEP  d0,BPL1,a0
+                    rts
+;;;;;;;;;;;;;;;;;;; END DOUBLE BUFFERING ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN SYSTEM SETUP ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 SystemSetup:        ;TODO: Workbench icon startup
@@ -157,12 +168,14 @@ CalledFromWB:       tst.l   WBMessage
 
 ;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 Init:               lea     CUSTOM,a5                       ;maybe useless here
+                    move.l  #PlayfieldA,DrawPF
+                    move.l  #PlayfieldB,ViewPF
 Colors:             move.w  #$000,COLOR00(a5)
                     move.w  #$fff,COLOR01(a5)
                     jsr     CalcMulTable
 MakeCopperlist:     move.l  #Copperlist,a0
-                    move.l  #Bitplane,a1
-                    CMOVEP  a1,BPL1,a0
+                    move.l  ViewPF,a1
+                    CMOVEP  a1,BPL1,a0                ;one bitplane for now
                     CWAITI  $07,YStart,a0
                     CMOVEI  $000,COLOR00,a0          
                     CWAITI  $ff,$ff,a0                ;end of copperlist, twice
@@ -179,7 +192,9 @@ SysConfig:          move.w  #(CUSTOMCLR|COPEN|BPLEN|BLTEN|SPREN),DMACON(a5)
 					move.w	#OurDDFSTOP,DDFSTOP(a5)
                     move.w	#(CUSTOMSET|DMAEN|COPEN|BPLEN|BLTEN),DMACON(a5)
 					move.w	#(CUSTOMSET|INTEN|VERTB),INTENA(a5)
-                    lea     Bitplane,a0
+                    lea     PlayfieldA,a0
+                    bsr.s   ClearBitplane
+                    lea     PlayfieldB,a0
                     bsr.s   ClearBitplane
                     CALLSYS GfxLibBase,WaitTOF
                     JUMPSYS WaitTOF  
@@ -201,10 +216,14 @@ ClearBitplane:      ;a0: bitplane address
                     rts
 ;;;;;;;;;;;;;;;;;;; END CLEAR BITPLANE ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;;;;;;;;;;;;;;;;;;; BEGIN PLOTDOT ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; BEGIN FIXED POINT MATH ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;; END FIXED POINT MATH ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;; BEGIN DOTS ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 CalcMulTable:       lea     PlotDotMulTable,a0
                     ;move.l  #((VOffset*BPWidth+HOffset)/8),d0
-                    move.l  #0,d0
+                    move.l  #((VOffset*BPWidth+HOffset)/8),d0
                     move.l  #(BPHeight-1),d7
 .loop               move.w  d0,(a0)+
                     addi.w  #(BPWidth/8),d0               ;so, it's a x40 table
@@ -223,9 +242,9 @@ PlotDot:            ;d0: X, d1: Y, a0: multiplication table, a1: bitplane
                     rts              ;Gloky suggests jmp(aX) instead of jsr/rts
 
 DrawDots:           lea     PlotDotMulTable,a0
-                    lea     Bitplane,a1
-                    move.l  #(BPHeight-1),d7
-.loopY              move.l  #(BPWidth-1),d6
+                    move.l  DrawPF,a1
+                    move.l  #(WHeight-1),d7
+.loopY              move.l  #(WWidth-1),d6
 .loopX              move.l  d6,d0
                     move.l  d7,d1
                     jsr     PlotDot
@@ -234,7 +253,7 @@ DrawDots:           lea     PlotDotMulTable,a0
                     subq    #3,d7
                     dbf     d7,.loopY
                     rts                    
-;;;;;;;;;;;;;;;;;;; END PLOTDOT ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; END DOTS ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN INTERRUPT HANDLERS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
                     SECTION main.interrupts,CODE_P
@@ -243,6 +262,7 @@ VBlankIntHandler:   ;movem.l d1-d7/a2-a6,-(sp)      ;sets a1 and returns a0, d0
                     add.l   #1,(a1)                               ;FrameCount++
                     bset.b  #VBFlag,4(a1)              ;set VBFlag bit of Flags
                     lea     CUSTOM,a0
+                    move.w  #$cc00,POTGO(a0)  ;reconfigure right button each VB
                     move.w  #VERTB,INTREQ(a0)             ;clear interrupt flag
                     move.w  #VERTB,INTREQ(a0)         ;twice for compatibility?
                     ;movem.l (sp)+,d1-d7/a2-a6
@@ -271,6 +291,8 @@ WBMessage           dc.l    0
 GfxLibBase          ds.l    1
 OldView             ds.l    1
 OldCopperlist       ds.l    1
+ViewPF              ds.l    1
+DrawPF              ds.l    1
                     ;mixed-length (structs)
                     CNOP    0,4
 VBlankIntData       ;data shared with interrupt handler
@@ -288,5 +310,6 @@ VBlankIntStruct     dc.l    0,0         ;LN_SUCC,LN_PRED, part of a linked list
                     SECTION main.chipdata,DATA_C
                     CNOP    0,4
 Copperlist          ds.b    128                       ;should be enough for now
-Bitplane            ds.b    BPSize
+PlayfieldA          ds.b    PlayfieldSize
+PlayfieldB          ds.b    PlayfieldSize
 ;;;;;;;;;;;;;;;;;;; END STATIC DATA ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
