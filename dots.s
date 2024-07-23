@@ -9,8 +9,8 @@ BPHeight            EQU     256
 Depth               EQU     1
 BPSize              EQU     (BPWidth*BPHeight/8)
 PlayfieldSize       EQU     (BPSize*Depth)
-WWidth              EQU     128
-WHeight             EQU     128
+WWidth              EQU     320
+WHeight             EQU     256
 HOffset             EQU     ((BPWidth-WWidth)/2)
 VOffset             EQU     ((BPHeight-WHeight)/2)
 XStart              EQU     $81
@@ -22,6 +22,11 @@ OurDIWSTOP          EQU     (((YStop-256)<<8)|(XStop-256))
 OurDDFSTRT          EQU     $38
 OurDDFSTOP          EQU     $d0
 VBFlag              EQU     0
+FPFractional        EQU     8
+FPSize              EQU     16
+EyeDepth            EQU     64 ;absolute value, real value = -64
+MaxDepth            EQU     512
+Radius              EQU     128
 ;;;;;;;;;;;;;;;;;;; END SYMBOLIC CONSTANTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN MACROS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -64,7 +69,16 @@ Setup:              bsr.w   SystemSetup
                     bsr.w   Init
 .mainLoop:          btst.b  #VBFlag,Flags
                     beq.s   .mainLoop
-                    jsr     DrawDots
+                    ;animation mode
+                    move.l  DrawPF,a0
+                    jsr     ClearBitplane
+                    btst    #14,DMACONR(a5)         ;waitfor the Blitter, twice
+.waitBlitter        btst    #14,DMACONR(a5)
+                    bne.s   .waitBlitter
+                    move.l  FrameCount,d0
+                    andi.l  #1024-1,d0                          ;angle mod 2*PI
+                    jsr     RotateX
+                    jsr     Draw3DDots
                     jsr     SwapBuffers
                     bclr.b  #VBFlag,Flags
                     btst	#10,POTINP+CUSTOM               ;right mouse button
@@ -76,12 +90,12 @@ Exit:               movem.l (sp)+,d1-d7/a0-a6
 ;;;;;;;;;;;;;;;;;;; END MAIN ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN DOUBLE BUFFERING ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;
-SwapBuffers:        move.l  DrawPF,d0
-                    move.l  ViewPF,d1
-                    move.l  d1,DrawPF
-                    move.l  d0,ViewPF
+SwapBuffers:        move.l  ViewPF,d0
+                    move.l  DrawPF,d1
+                    move.l  d0,DrawPF
+                    move.l  d1,ViewPF
                     move.l  #Copperlist,a0
-                    CMOVEP  d0,BPL1,a0
+                    CMOVEP  d1,BPL1,a0
                     rts
 ;;;;;;;;;;;;;;;;;;; END DOUBLE BUFFERING ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -172,7 +186,8 @@ Init:               lea     CUSTOM,a5                       ;maybe useless here
                     move.l  #PlayfieldB,ViewPF
 Colors:             move.w  #$000,COLOR00(a5)
                     move.w  #$fff,COLOR01(a5)
-                    jsr     CalcMulTable
+                    jsr     CalcMulTables
+                    jsr     Copy3DObject
 MakeCopperlist:     move.l  #Copperlist,a0
                     move.l  ViewPF,a1
                     CMOVEP  a1,BPL1,a0                ;one bitplane for now
@@ -207,8 +222,8 @@ SysConfig:          move.w  #(CUSTOMCLR|COPEN|BPLEN|BLTEN|SPREN),DMACON(a5)
 ClearBitplane:      ;a0: bitplane address
                     lea     CUSTOM,a5
                     btst    #14,DMACONR(a5)        ;wait for the Blitter, twice
-.waitBlitterA       btst    #14,DMACONR(a5)
-                    bne.s   .waitBlitterA
+.waitBlitter        btst    #14,DMACONR(a5)
+                    bne.s   .waitBlitter
                     move.l  #USED<<16,BLTCON0(a5)  ;clear mode
                     clr.w   BLTDMOD(a5)
                     move.l  a0,BLTDPTH(a5)
@@ -216,18 +231,72 @@ ClearBitplane:      ;a0: bitplane address
                     rts
 ;;;;;;;;;;;;;;;;;;; END CLEAR BITPLANE ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;;;;;;;;;;;;;;;;;;; BEGIN FIXED POINT MATH ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; BEGIN GEOMETRY ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+CosineSine:         move.w  d0,d1        ;input: angle in d0 (0..1023)(0..2*PI)
+                    addi.w  #256,d0      ;+ PI/2
+                    andi.w  #1023,d0     ;modulo 2*PI
+                    add.w   d0,d0
+                    move.w  (a2,d0.w),d0 ;output: cosine in d0 [Q2.14]
+                    add.w   d1,d1
+                    move.w  (a2,d1.w),d1 ;output: sine in d1 [Q2.14]
+                    rts
 
-;;;;;;;;;;;;;;;;;;; END FIXED POINT MATH ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+Copy3DObject:       lea     Cube,a0        ;a0 = source, object definition
+                    lea     Transform,a1   ;a1 = destination, object transforms
+                    move.w  #(8-1)*3*2,d0  ;d0 = n points
+.loop               move.w  (a0,d0.w),(a1,d0.w)
+                    move.w  2(a0,d0.w),2(a1,d0.w)
+                    move.w  4(a0,d0.w),4(a1,d0.w)
+                    subi.w  #6,d0
+                    bpl.s   .loop
+                    rts
+
+RotateX:            lea     Cube,a0
+                    lea     Transform,a1
+                    lea     SineTable,a2
+                    ;angle in d0
+                    bsr.s   CosineSine             ;d0 = cos, d1 = sin
+                    moveq   #14,d2                 ;fixed point factor
+                    move.w  #(8-1)*3*2,d7          ;number of points = 8
+.loop               move.w  (a0,d7.w),d4           ;d4 = Z
+                    move.w  2(a0,d7.w),d3          ;d3 = Y (X is invariant)
+                    move.w  d4,d6                  ;save Z
+                    move.w  d3,d5                  ;save Y
+                    muls    d0,d4                  ;d3 = Z * cos
+                    muls    d1,d3                  ;d4 = Y * sin
+                    add.l   d4,d3                  ;d3 = Z * cos + Y * sin
+                    asr.l   d2,d3                  ;reverse fixed point factor
+                    move.w  d3,(a1,d7.w)           ;new Z
+                    muls    d0,d5                  ;d5 = Y * cos
+                    muls    d1,d6                  ;d6 = Z * sin
+                    sub.l   d6,d5                  ;d5 = Y * cos - Z * sin
+                    asr.l   d2,d5                  ;reverse fixed point factor
+                    move.w  d5,2(a1,d7.w)          ;new Y
+                    subi.w  #6,d7
+                    bpl.w   .loop
+                    rts
+;;;;;;;;;;;;;;;;;;; END GEOMETRY ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN DOTS ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-CalcMulTable:       lea     PlotDotMulTable,a0
-                    ;move.l  #((VOffset*BPWidth+HOffset)/8),d0
+CalcMulTables:      lea     PlotDotTable,a0
                     move.l  #((VOffset*BPWidth+HOffset)/8),d0
                     move.l  #(BPHeight-1),d7
-.loop               move.w  d0,(a0)+
-                    addi.w  #(BPWidth/8),d0               ;so, it's a x40 table
-                    dbf     d7,.loop
+.loopPlotDot        move.w  d0,(a0)+
+                    addi.w  #(BPWidth/8),d0            ;so, it's a x40 table
+                    dbf     d7,.loopPlotDot
+
+                    lea     ProjectTable,a0
+                    move.l  #(EyeDepth)<<15,d0
+                    move.w  #(512-1),d7              ;0 < i < 511
+.loopProject        move.l  d0,d1                      ;numerator
+                    move.w  d7,d2                      
+                    addi.w  #64,d2                   ;denominator
+                    divu    d2,d1                      ;64<<15/(z+64)
+                    andi.l  #$0000ffff,d1
+                    move.w  d7,d3                      ;double i
+                    add.w   d3,d3
+                    move.w  d1,(a0,d3)                 ;quotient 2.14 to word
+                    dbf     d7,.loopProject                
                     rts
 
 PlotDot:            ;d0: X, d1: Y, a0: multiplication table, a1: bitplane
@@ -241,18 +310,47 @@ PlotDot:            ;d0: X, d1: Y, a0: multiplication table, a1: bitplane
                     bset.b  d2,(a1,d0)
                     rts              ;Gloky suggests jmp(aX) instead of jsr/rts
 
-DrawDots:           lea     PlotDotMulTable,a0
+DrawCircle:         lea     PlotDotTable,a0
                     move.l  DrawPF,a1
-                    move.l  #(WHeight-1),d7
-.loopY              move.l  #(WWidth-1),d6
-.loopX              move.l  d6,d0
-                    move.l  d7,d1
+                    lea     SineTable,a2
+                    moveq   #14,d3 ;PlotDot uses d2
+                    move.w  #1024-1,d7
+.loop               move.w  d7,d0
+                    jsr     CosineSine
+                    muls    #120,d0
+                    asr.l   d3,d0
+                    addi.w  #160,d0
+                    muls    #120,d1
+                    asr.l   d3,d1
+                    addi.w  #128,d1
                     jsr     PlotDot
-                    subq    #3,d6
-                    dbf     d6,.loopX
-                    subq    #3,d7
-                    dbf     d7,.loopY
-                    rts                    
+                    dbf     d7,.loop
+                    rts
+
+Draw3DDots:         lea     PlotDotTable,a0
+                    move.l  DrawPF,a1
+                    lea     ProjectTable,a2
+                    lea     Transform,a3           ;a3 = 3D dots table
+                    move.w  #(8-1)*3*2,d7          ;number of points = 8
+                    ;moveq   #0,d1
+.loop               move.w  (a3,d7.w),d2           ;Z
+                    addi.w  #(MaxDepth/2),d2
+                    move.w  2(a3,d7.w),d1          ;Y
+                    move.w  4(a3,d7.w),d0          ;X
+                    
+                    add.w   d2,d2
+                    move.w  (a2,d2.w),d2           ;64<<15/(64+Z) [Q1.15]
+                    muls    d2,d0                  ;64<<15/(64+Z) * X
+                    muls    d2,d1                  ;64<<15/(64+Z) * Y
+                    moveq	#15,d2                 ;reverse fixed point factor
+                    asr.l	d2,d0
+                    asr.l   d2,d1
+                    addi.w  #(WWidth/2),d0         ;64/(64+Z) * X + 160
+                    addi.w  #(WHeight/2),d1        ;64/(64+Z) * Y + 128
+                    jsr     PlotDot
+                    subi.w  #6,d7
+                    bpl.w   .loop
+                    rts
 ;;;;;;;;;;;;;;;;;;; END DOTS ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN INTERRUPT HANDLERS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -284,7 +382,18 @@ OldDMACON           ds.l    1
 OldINTENA           ds.l    1
 OldINTREQ           ds.l    1
 OldADKCON           ds.l    1
-PlotDotMulTable     ds.w    (2*BPHeight)
+PlotDotTable        ds.w    (2*BPHeight)
+SineTable           include "sinetable.i"
+ProjectTable        ds.w    2*MaxDepth
+Cube                dc.w    -Radius, -Radius, -Radius
+                    dc.w    -Radius, -Radius,  Radius
+                    dc.w    -Radius,  Radius, -Radius
+                    dc.w    -Radius,  Radius,  Radius
+                    dc.w     Radius, -Radius, -Radius
+                    dc.w     Radius, -Radius,  Radius
+                    dc.w     Radius,  Radius, -Radius
+                    dc.w     Radius,  Radius,  Radius
+Transform           ds.w    3*8
                     ;long-length
                     CNOP    0,4
 WBMessage           dc.l    0
