@@ -23,6 +23,7 @@ OurDIWSTOP          EQU     (((YStop-256)<<8)|(XStop-256))
 OurDDFSTRT          EQU     $38
 OurDDFSTOP          EQU     $d0
 VBFlag              EQU     0
+FadeInFlag          EQU     1
 
 QuantizedTau        EQU     1024  ;degrees in 2*Pi radians
 MaxDepth            EQU     512   ;world depth from screen
@@ -57,10 +58,6 @@ CMOVEI              MACRO ;CMOVEI <#value>,<#register>,<aX CL ptr> [4 bytes]
                     move.w  #\2,(\3)+
                     move.w  #\1,(\3)+
                     ENDM
-CMOVEA              MACRO ;CMOVEA <aX: array ptr>,<aY: ptr to register>,<aZ CL>
-                    move.w	\2,(\3)+
-					move.w	(\1)+,(\3)+
-                    ENDM
 CMOVEP              MACRO ;CMOVEPTR <ptr>,<#reg name+num>,<aX CL ptr> [8 bytes]
                     move.l  \1,d7
                     move.w  #\2PTL,(\3)+
@@ -77,11 +74,15 @@ CMOVEP              MACRO ;CMOVEPTR <ptr>,<#reg name+num>,<aX CL ptr> [8 bytes]
 Start:              movem.l d1-d7/a0-a6,-(sp)
 Setup:              bsr.w   SystemSetup
                     bsr.w   DemoInit
+                    bset.b  #FadeInFlag,Flags       ;start by doing the fade in
 Mainloop:           btst.b  #VBFlag,Flags
                     beq.s   Mainloop
                     move.l  BlitPF,a0
                     bsr     ClearDots
-                    bsr     TransformDots
+                    btst.b  #FadeInFlag,Flags
+                    beq.s   .FadeInDone
+                    bsr     FadeIn
+.FadeInDone         bsr     TransformDots
                     bsr     RollBuffers
                     bclr.b  #VBFlag,Flags
                     btst	#10,POTINP+CUSTOM               ;right mouse button
@@ -221,11 +222,12 @@ MakeCopperlist:     move.l  #Copperlist,a0
                     add.l   #BPSize,a1
                     CMOVEP  a1,BPL3,a0
                     CWAITI	$07,YStart,a0
-                    lea     Palette,a1
+                    move.l  a0,PalettePos
                     lea     COLOR00,a2
                     moveq   #(8-1),d7
-.loop               CMOVEA  a1,a2,a0
-                    addq    #2,a2
+.loop               move.w	a2,(a0)+
+					move.w	#0,(a0)+
+                    addq    #2,a2                     
                     dbf     d7,.loop
                     CWAITI	$df,$ff,a0          
                     CWAITI  $ff,$ff,a0                ;end of copperlist, twice
@@ -307,6 +309,47 @@ ClearDots:          ;a0: bitplane address
                     move.w  #((WHeight<<6)|(WWidth/16)),BLTSIZE(a5) ;in words
                     rts
 ;;;;;;;;;;;;;;;;;;; END BITPLANE PREP ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;; BEGIN TRANSITION ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+FadeIn:             lea     FadeCounter,a3
+                    cmpi.b  #17,(a3)
+                    bne     .continue
+                    bclr.b  #FadeInFlag,Flags      ;fade in done
+                    bra     .exit
+.continue           moveq   #0,d0
+                    move.b  (a3),d0
+                    moveq   #0,d1
+                    moveq   #0,d2
+                    moveq   #0,d3
+                    moveq   #0,d4
+                    lea     Palette,a0
+                    lea     COLOR00,a1
+                    move.l  PalettePos,a2
+                    moveq   #(8-1),d7
+.loop               move.w  (a0)+,d1
+                    move.w  d1,d2                  ;red component
+                    lsr.w   #8,d2
+                    mulu    d0,d2
+                    lsr.w   #4,d2
+                    lsl.w   #8,d2
+                    move.w  d1,d3                  ;green component
+                    andi.w  #$00f0,d3
+                    lsr.w   #4,d3
+                    mulu    d0,d3
+                    andi.w  #$fff0,d3
+                    move.w  d1,d4                  ;blue component
+                    andi.w  #$000f,d4
+                    mulu    d0,d4
+                    lsr.w   #4,d4
+                    or.w    d4,d3                  ;gather components
+                    or.w    d3,d2   
+                    move.w	a1,(a2)+
+					move.w	d2,(a2)+
+                    addq    #2,a1                        
+                    dbf     d7,.loop
+                    addi.b  #1,(a3)
+.exit               rts
+;;;;;;;;;;;;;;;;;;; END TRANSITION ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN DOTS ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 CalcPlotDotLUT:     lea     PlotDotLUT,a0
@@ -417,7 +460,7 @@ GenerateCube:       move.w  #Radius,d5
 TransformDots:      
 SineCosine:         lea     SineLUT,a0
                     move.l  FrameCount,d5        ;get time
-                    move.w  d5,d0                ;for next part
+                    move.l  d5,d0                ;for next part
                     asl.l   #1,d5                ;adjusting time
                     andi.w  #(QuantizedTau-1),d5 ;into angle [0, Tau[
                     move.w  d5,d6                ;save angle
@@ -428,7 +471,7 @@ SineCosine:         lea     SineLUT,a0
                     add.w   d5,d5                ;68000 limitation
                     move.w  (a0,d5.w),d5         ;get cos(angle)
 
-InterpolationT:     asr.l   #2,d0                ;adjusting time
+InterpolationT:     asr.l   #2,d0
                     andi.w  #(QuantizedTau-1),d0 ;modulo Tau
                     add.w   d0,d0
                     lea     LerpLUT,a0          
@@ -543,6 +586,7 @@ VBlankIntHandler:   ;movem.l d1-d7/a2-a6,-(sp)      ;sets a1 and returns a0, d0
 VBlankIntName       dc.b    "main.interrupts.vblank",0
 GfxLibName          dc.b    "graphics.library",0
 ErrNo               dc.b    0
+FadeCounter         dc.b    0
                     ;word-length
                     CNOP    0,2
 MusicData           incbin  "dots5.lsmusic"
@@ -569,6 +613,7 @@ WBMessage           dc.l    0
 GfxLibBase          ds.l    1
 OldView             ds.l    1
 OldCopperlist       ds.l    1
+PalettePos          ds.l    1
 ViewPF              ds.l    1
 DrawPF              ds.l    1
 BlitPF              ds.l    1
