@@ -77,12 +77,12 @@ Setup:              bsr.w   SystemSetup
                     bset.b  #FadeInFlag,Flags       ;start by doing the fade in
 Mainloop:           btst.b  #VBFlag,Flags
                     beq.s   Mainloop
-                    move.l  BlitPF,a0
-                    bsr     ClearDots
                     btst.b  #FadeInFlag,Flags
-                    beq.s   .FadeInDone
+                    beq.s   .fadeInDone
                     bsr     FadeIn
-.FadeInDone         bsr     TransformDots
+.fadeInDone         move.l  BlitPF,a0
+                    bsr     ClearDots
+                    bsr     TransformDots
                     bsr     RollBuffers
                     bclr.b  #VBFlag,Flags
                     btst	#10,POTINP+CUSTOM               ;right mouse button
@@ -191,8 +191,9 @@ CalledFromWB:       tst.l   WBMessage
 .exit               rts
 ;;;;;;;;;;;;;;;;;;; END SYSTEM CLEANUP ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-DemoInit:           bsr     CalcPlotDotLUT
+;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+DemoInit:           bsr     MapScrolltext
+                    bsr     CalcPlotDotLUT
                     bsr     GenerateSphere
                     bsr     GenerateCube
 AllocPlayfields:    move.l  #(MEMF_CHIP|MEMF_CLEAR),d1
@@ -257,7 +258,7 @@ SysConfig:          move.w  #(CUSTOMCLR|COPEN|BPLEN|BLTEN|SPREN),DMACON(a5)
 			        bsr		LSP_MusicDriver_CIA_Start
 			        move.w	#$e000,$dff09a
                     rts
-;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN CLEANUP ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 DemoCleanup:        bsr     LSP_MusicDriver_CIA_Stop
@@ -350,6 +351,66 @@ FadeIn:             lea     FadeCounter,a3
                     addi.b  #1,(a3)
 .exit               rts
 ;;;;;;;;;;;;;;;;;;; END TRANSITION ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;; BEGIN SCROLLTEXT ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+MapScrolltext:      move.l  #(MEMF_CHIP|MEMF_CLEAR),d1
+                    move.l  #(ErrNo-Scrolltext)*2,d0
+                    CALLSYS SysBase,AllocMem
+                    move.l  d0,Scrollmap
+                    lea     Scrolltext,a0
+                    move.l  d0,a1
+.loop               moveq   #0,d0
+                    move.b  (a0)+,d0
+                    beq.w   .exit
+                    cmpi.b  #32,d0 ;' '
+                    bne.s   .notASpace
+                    move.w  #32*40,(a1)+
+                    bra.s   .loop
+.notASpace          cmpi.b  #33,d0 ;'!'
+                    bne.s   .notABang
+                    move.w  #32*26,(a1)+
+                    bra.s   .loop
+.notABang           cmpi.b  #63,d0 ;'?'
+                    bne.s   .notAQMark
+                    move.w  #32*27,(a1)+
+                    bra.s   .loop
+.notAQMark          cmpi.b  #47,d0 ;'/'
+                    bne.s   .notASlash
+                    move.w  #32*28,(a1)+
+                    bra.s   .loop
+.notASlash          cmpi.b  #46,d0 ;'.'
+                    bne.s   .notADot
+                    move.w  #32*29,(a1)+
+                    bra.s   .loop
+.notADot            cmpi.b  #48,d0 ;'0'
+                    bcs.s   .loop ;smaller? not a digit or letter
+                    cmpi.b  #57,d0 ;'9'
+                    bhi.s   .notADigit
+                    subi.b  #48,d0 ;digit
+                    asl.w   #5,d0  ;* 32 pixels wide
+                    addi.w  #30,d0 ;start of digits
+                    move.w  d0,(a1)+
+                    bra.s   .loop
+.notADigit          cmpi.b  #65,d0 ;'A'
+                    bcs.s   .loop ;smaller? not a letter
+                    cmpi.b  #90,d0 ;'Z'
+                    bhi.s   .notAnUppercase
+                    subi.b  #65,d0 ;uppercase letter index
+                    asl.w   #5,d0  ;* 32 pixels wide
+                    move.w  d0,(a1)+
+                    bra.s   .loop 
+.notAnUppercase     cmpi.b  #97,d0 ;'a'
+                    bcs.s   .loop ;smaller? not a letter
+                    cmpi.b  #122,d0 ; 'z'
+                    bhi.s   .notALowercase
+                    subi.b  #97,d0 ;lowercase letter index
+                    asl.w   #5,d0 ;* 32 pixels wide
+                    move.w  d0,(a1)+
+.notALowercase      bra.w   .loop
+.exit               rts
+
+Scroll:             rts
+;;;;;;;;;;;;;;;;;;; END SCROLLTEXT ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN DOTS ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 CalcPlotDotLUT:     lea     PlotDotLUT,a0
@@ -585,6 +646,7 @@ VBlankIntHandler:   ;movem.l d1-d7/a2-a6,-(sp)      ;sets a1 and returns a0, d0
                     dc.b    "$VER: dots 0.1",0             ;for Version command
 VBlankIntName       dc.b    "main.interrupts.vblank",0
 GfxLibName          dc.b    "graphics.library",0
+Scrolltext          include "scrolltext.i"
 ErrNo               dc.b    0
 FadeCounter         dc.b    0
                     ;word-length
@@ -617,6 +679,7 @@ PalettePos          ds.l    1
 ViewPF              ds.l    1
 DrawPF              ds.l    1
 BlitPF              ds.l    1
+Scrollmap           ds.l    1
                     ;mixed-length (structs)
                     CNOP    0,4
 VBlankIntData       ;data shared with interrupt handler
@@ -634,6 +697,8 @@ VBlankIntStruct     dc.l    0,0         ;LN_SUCC,LN_PRED, part of a linked list
                     SECTION main.chipdata,DATA_C
                     CNOP    0,4
 Logo                incbin  "logo.raw"
+                    CNOP    0,4
+Font                incbin  "font.raw"
                     CNOP    0,4
 SoundBank           incbin  "dots5.lsbank"
                     CNOP    0,4
