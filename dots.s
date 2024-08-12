@@ -34,6 +34,9 @@ ProjLUTFactor       EQU     15    ;scale of 3D projection table
 LerpLUTFactor       EQU     15    ;scale of interpolation table
 Sqrt22              EQU     $5a82 ;sqrt(2)/2 << 15
 Sqrt22Factor        EQU     15    ;scale of sqrt(2)/2
+
+NGlyphs             EQU     (26+10+7) ;26 letters, 10 digits, 7 symbols
+NewGlyphPos         EQU     (((BPWidth-32-1)/8)+(BPHeight-32-1)*(BPWidth/8))
 ;;;;;;;;;;;;;;;;;;; END SYMBOLIC CONSTANTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN MACROS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -77,12 +80,13 @@ Setup:              bsr.w   SystemSetup
                     bset.b  #FadeInFlag,Flags       ;start by doing the fade in
 Mainloop:           btst.b  #VBFlag,Flags
                     beq.s   Mainloop
-                    btst.b  #FadeInFlag,Flags
-                    beq.s   .fadeInDone
-                    bsr     FadeIn
-.fadeInDone         move.l  BlitPF,a0
+                    move.l  BlitPF,a0
                     bsr     ClearDots
-                    bsr     TransformDots
+                    btst.b  #FadeInFlag,Flags
+                    beq.s   .FadeInDone
+                    bsr     FadeIn
+.FadeInDone         bsr     TransformDots
+                    bsr     BlitGlyph
                     bsr     RollBuffers
                     bclr.b  #VBFlag,Flags
                     btst	#10,POTINP+CUSTOM               ;right mouse button
@@ -191,7 +195,7 @@ CalledFromWB:       tst.l   WBMessage
 .exit               rts
 ;;;;;;;;;;;;;;;;;;; END SYSTEM CLEANUP ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 DemoInit:           bsr     MapScrolltext
                     bsr     CalcPlotDotLUT
                     bsr     GenerateSphere
@@ -258,7 +262,7 @@ SysConfig:          move.w  #(CUSTOMCLR|COPEN|BPLEN|BLTEN|SPREN),DMACON(a5)
 			        bsr		LSP_MusicDriver_CIA_Start
 			        move.w	#$e000,$dff09a
                     rts
-;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;; BEGIN INITIALIZATION ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN CLEANUP ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 DemoCleanup:        bsr     LSP_MusicDriver_CIA_Stop
@@ -273,6 +277,9 @@ DemoCleanup:        bsr     LSP_MusicDriver_CIA_Stop
                     move.l  ViewPF,a1
                     move.w  #PFSize,d0
                     JUMPSYS FreeMem
+                    ;move.l  Scrollmap,a1
+                    ;move.w  #(NGlyphs*2),d0
+                    ;JUMPSYS FreeMem
                     rts
 ;;;;;;;;;;;;;;;;;;; END CLEANUP ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -353,63 +360,93 @@ FadeIn:             lea     FadeCounter,a3
 ;;;;;;;;;;;;;;;;;;; END TRANSITION ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN SCROLLTEXT ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-MapScrolltext:      move.l  #(MEMF_CHIP|MEMF_CLEAR),d1
-                    move.l  #(ErrNo-Scrolltext)*2,d0
-                    CALLSYS SysBase,AllocMem
-                    move.l  d0,Scrollmap
-                    lea     Scrolltext,a0
-                    move.l  d0,a1
-.loop               moveq   #0,d0
+                    ;maps each character onto x-position in font sheet
+MapScrolltext:      ;move.l  #(MEMF_CHIP|MEMF_CLEAR),d1
+                    ;move.l  #(2*NGlyphs),d0               ;x-position is a word
+                    ;CALLSYS SysBase,AllocMem
+                    ;move.l  d0,Scrollmap                  ;permanent ptr to map
+                    ;move.l  d0,ScrollmapPtr        ;running ptr to current char
+                    lea     Scrolltext,a0          ;source, inc: byte
+                    lea     Scrollmap,a1
+                    ;move.l  d0,a1                  ;destination, inc: word
+.loop               clr.l   d0
                     move.b  (a0)+,d0
-                    beq.w   .exit
-                    cmpi.b  #32,d0 ;' '
-                    bne.s   .notASpace
-                    move.w  #32*40,(a1)+
+                    beq.w   .exit                  ;char is NULL, loop is over
+                    cmpi.b  #32,d0                 ;' '
+                    bne.s   .notSpace
+                    move.w  #4*42,(a1)+
                     bra.s   .loop
-.notASpace          cmpi.b  #33,d0 ;'!'
-                    bne.s   .notABang
-                    move.w  #32*26,(a1)+
+.notSpace           cmpi.b  #33,d0                 ;'!'
+                    bne.s   .notBang
+                    move.w  #4*26,(a1)+            ;position in bytes
                     bra.s   .loop
-.notABang           cmpi.b  #63,d0 ;'?'
-                    bne.s   .notAQMark
-                    move.w  #32*27,(a1)+
+.notBang            cmpi.b  #44,d0                 ;','
+                    bne.s   .notComma
+                    move.w  #4*41,(a1)+
                     bra.s   .loop
-.notAQMark          cmpi.b  #47,d0 ;'/'
-                    bne.s   .notASlash
-                    move.w  #32*28,(a1)+
+.notComma           cmpi.b  #46,d0                 ;'.'
+                    bne.s   .notPeriod
+                    move.w  #4*29,(a1)+
                     bra.s   .loop
-.notASlash          cmpi.b  #46,d0 ;'.'
-                    bne.s   .notADot
-                    move.w  #32*29,(a1)+
+.notPeriod          cmpi.b  #47,d0                 ;'/'
+                    bne.s   .notSlash
+                    move.w  #4*28,(a1)+
                     bra.s   .loop
-.notADot            cmpi.b  #48,d0 ;'0'
-                    bcs.s   .loop ;smaller? not a digit or letter
-                    cmpi.b  #57,d0 ;'9'
-                    bhi.s   .notADigit
-                    subi.b  #48,d0 ;digit
-                    asl.w   #5,d0  ;* 32 pixels wide
-                    addi.w  #30,d0 ;start of digits
+.notSlash           cmpi.b  #58,d0                 ;':'
+                    bne.s   .notColon
+                    move.w  #4*40,(a1)+
+                    bra.s   .loop
+.notColon           cmpi.b  #63,d0                 ;'?'
+                    bne.s   .notQuestionMark
+                    move.w  #4*27,(a1)+
+                    bra.s   .loop
+.notQuestionMark    cmpi.b  #48,d0                 ;'0'
+                    bcs.s   .loop                  ;<'0', not alphanum
+                    cmpi.b  #57,d0                 ;'9'
+                    bhi.s   .notDigit              ;>'9'
+                    subi.b  #48,d0                 ;numchar to #digit
+                    addi.b  #30,d0                 ;digits' position
+                    asl.w   #2,d0                  ;*4
                     move.w  d0,(a1)+
                     bra.s   .loop
-.notADigit          cmpi.b  #65,d0 ;'A'
-                    bcs.s   .loop ;smaller? not a letter
-                    cmpi.b  #90,d0 ;'Z'
-                    bhi.s   .notAnUppercase
-                    subi.b  #65,d0 ;uppercase letter index
-                    asl.w   #5,d0  ;* 32 pixels wide
+.notDigit           cmpi.b  #65,d0                 ;'A'
+                    bcs.s   .loop                  ;<'A', not letter
+                    cmpi.b  #90,d0                 ;'Z'
+                    bhi.s   .notUppercaseLetter    ;>'Z', not uppercase letter
+                    subi.b  #65,d0                 ;char to #char
+                    asl.w   #2,d0                  ;*4
                     move.w  d0,(a1)+
-                    bra.s   .loop 
-.notAnUppercase     cmpi.b  #97,d0 ;'a'
-                    bcs.s   .loop ;smaller? not a letter
-                    cmpi.b  #122,d0 ; 'z'
-                    bhi.s   .notALowercase
-                    subi.b  #97,d0 ;lowercase letter index
-                    asl.w   #5,d0 ;* 32 pixels wide
+                    bra.w   .loop
+.notUppercaseLetter cmpi.b  #97,d0                 ;'a'
+                    bcs.w   .loop                  ;<'a', not letter
+                    cmpi.b  #122,d0                ;'z'
+                    bhi.w   .loop                  ;>'z', not known char
+                    subi.b  #97,d0                 ;char to #char
+                    asl.w   #2,d0                  ;*4
                     move.w  d0,(a1)+
-.notALowercase      bra.w   .loop
+                    bra.w   .loop
 .exit               rts
 
-Scroll:             rts
+BlitGlyph:          clr.l   d0
+                    lea     Scrollmap,a1
+                    move.w  (a1),d0
+                    lea     Font,a0
+                    add.l   d0,a0         ;source
+                    move.l  BlitPF,a1
+                    add.l   #NewGlyphPos,a1 ;destination
+                    lea		CUSTOM,a5
+					btst	#14,DMACONR(a5)					 ;wait for the blit
+.waitblitA			btst	#14,DMACONR(a5)
+					bne.s	.waitblitA
+					move.w	#$ffff,BLTAFWM(a5)				       ;clear masks
+					move.w	#$ffff,BLTALWM(a5)
+					move.l	#(USEA|USED|$f0)<<16,BLTCON0(a5) ;A -> D, copy mode
+					move.w	#((NGlyphs-1)*4),BLTAMOD(a5)            ;copy everything from source
+					move.w	#((BPWidth-32)/8),BLTDMOD(a5)			
+					move.l	a0,BLTAPTH(a5)                              ;source
+					move.l	a1,BLTDPTH(a5)                         ;destination						
+					move.w	#((32<<6)|(32/16)),BLTSIZE(a5)											
+                    rts
 ;;;;;;;;;;;;;;;;;;; END SCROLLTEXT ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN DOTS ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -649,6 +686,7 @@ GfxLibName          dc.b    "graphics.library",0
 Scrolltext          include "scrolltext.i"
 ErrNo               dc.b    0
 FadeCounter         dc.b    0
+ScrollCounter       dc.b    0
                     ;word-length
                     CNOP    0,2
 MusicData           incbin  "dots5.lsmusic"
@@ -659,6 +697,7 @@ OldINTREQ           ds.l    1
 OldADKCON           ds.l    1
                     ;word-length arrays
 Palette             dc.w    $614,$fff,$fae,$a45,$d79,$ff0,$a91,$431
+Scrollmap           ds.w    (NGlyphs*2)
                     ;ZXY order
 Sphere              ds.w    N*3
 Cube                ds.w    N*3
@@ -679,7 +718,8 @@ PalettePos          ds.l    1
 ViewPF              ds.l    1
 DrawPF              ds.l    1
 BlitPF              ds.l    1
-Scrollmap           ds.l    1
+;Scrollmap           ds.l    1
+;ScrollmapPtr        ds.l    1
                     ;mixed-length (structs)
                     CNOP    0,4
 VBlankIntData       ;data shared with interrupt handler
@@ -696,9 +736,9 @@ VBlankIntStruct     dc.l    0,0         ;LN_SUCC,LN_PRED, part of a linked list
 
                     SECTION main.chipdata,DATA_C
                     CNOP    0,4
-Logo                incbin  "logo.raw"
+Font                incbin  "fontsheet.raw"
                     CNOP    0,4
-Font                incbin  "font.raw"
+Logo                incbin  "logo.raw"
                     CNOP    0,4
 SoundBank           incbin  "dots5.lsbank"
                     CNOP    0,4
