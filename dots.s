@@ -36,8 +36,8 @@ Sqrt22              EQU     $5a82 ;sqrt(2)/2 << 15
 Sqrt22Factor        EQU     15    ;scale of sqrt(2)/2
 
 NGlyphs             EQU     (26+10+7) ;26 letters, 10 digits, 7 symbols
-NewGlyphTopLeft     EQU     (((BPWidth-33)+(BPHeight-33)*BPWidth)/8)
-NewGlyphBottomRight EQU     (((BPWidth-1)+(BPHeight-1)*BPWidth)/8)
+NewGlyphTopLeft     EQU     (((BPWidth-32)+(BPHeight-32)*BPWidth)/8)
+NewGlyphBottomRight EQU     (((BPWidth)+(BPHeight)*BPWidth)/8)
 ;;;;;;;;;;;;;;;;;;; END SYMBOLIC CONSTANTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN MACROS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -81,14 +81,14 @@ Setup:              bsr.w   SystemSetup
                     bset.b  #FadeInFlag,Flags       ;start by doing the fade in
 Mainloop:           btst.b  #VBFlag,Flags
                     beq.s   Mainloop
-                    bsr     Scroll
-                    move.l  BlitPF,a0
-                    bsr     ClearDots
-                    
+                    move.l  DrawPF,a0
+                    bsr     ClearDots    
                     btst.b  #FadeInFlag,Flags
-                    beq.s   .FadeInDone
+                    beq.s   .if
                     bsr     FadeIn
-.FadeInDone         bsr     TransformDots
+                    bra.s   .endif
+.if                 bsr     Scroll
+.endif              bsr     TransformDots
                     bsr     RollBuffers
                     bclr.b  #VBFlag,Flags
                     btst	#10,POTINP+CUSTOM               ;right mouse button
@@ -101,12 +101,10 @@ Exit:               movem.l (sp)+,d1-d7/a0-a6
 ;;;;;;;;;;;;;;;;;;; END MAIN ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN DOUBLE BUFFERING ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;
-RollBuffers:        move.l  BlitPF,a0
+RollBuffers:        move.l  ViewPF,a0
                     move.l  DrawPF,a1
-                    move.l  ViewPF,a2
                     move.l  a0,DrawPF
                     move.l  a1,ViewPF
-                    move.l  a2,BlitPF
                     move.l  #Copperlist,a0
                     CMOVEP  a1,BPL1,a0
                     add.l   #BPSize,a1
@@ -202,15 +200,9 @@ DemoInit:           bsr     MapScrolltext
                     bsr     CalcPlotDotLUT
                     bsr     GenerateSphere
                     bsr     GenerateCube
-AllocPlayfields:    move.l  #(MEMF_CHIP|MEMF_CLEAR),d1
+AllocPlayfields:    move.l  #(MEMF_CHIP|MEMF_CLEAR),d1 ;AllocMem trashes d1
                     move.l  #PFSize,d0
                     CALLSYS SysBase,AllocMem
-                    move.l  d0,BlitPF
-                    move.l  d0,a0
-                    bsr     BlitLogo
-                    move.l  #(MEMF_CHIP|MEMF_CLEAR),d1 ;AllocMem trashes d1
-                    move.l  #PFSize,d0
-                    JUMPSYS AllocMem
                     move.l  d0,DrawPF
                     move.l  d0,a0
                     bsr     BlitLogo
@@ -236,7 +228,9 @@ MakeCopperlist:     move.l  #Copperlist,a0
 					move.w	#0,(a0)+
                     addq    #2,a2                     
                     dbf     d7,.loop
-                    CWAITI	$df,$ff,a0          
+                    CWAITI	$df,$ff,a0   
+                    CWAITI  $07,(YStart+BPHeight-32),a0
+                    CMOVEI  $ff0,COLOR01,a0       
                     CWAITI  $ff,$ff,a0                ;end of copperlist, twice
                     CWAITI  $ff,$ff,a0
 
@@ -270,18 +264,12 @@ SysConfig:          move.w  #(CUSTOMCLR|COPEN|BPLEN|BLTEN|SPREN),DMACON(a5)
 DemoCleanup:        bsr     LSP_MusicDriver_CIA_Stop
                     lea     CUSTOM,a5
                     move.w  #(CUSTOMCLR|COPEN|BPLEN),DMACON(a5)
-                    move.l  BlitPF,a1
-                    move.w  #PFSize,d0
-                    CALLSYS SysBase,FreeMem
                     move.l  DrawPF,a1
                     move.w  #PFSize,d0
-                    JUMPSYS FreeMem
+                    CALLSYS SysBase,FreeMem
                     move.l  ViewPF,a1
                     move.w  #PFSize,d0
                     JUMPSYS FreeMem
-                    ;move.l  Scrollmap,a1
-                    ;move.w  #(NGlyphs*2),d0
-                    ;JUMPSYS FreeMem
                     rts
 ;;;;;;;;;;;;;;;;;;; END CLEANUP ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -429,8 +417,6 @@ MapScrolltext:      lea     Scrolltext,a0          ;source, inc: byte
                     ;current glyphmap in d0, trashes a0-a1-a5
 BlitGlyph:          lea     Font,a0
                     add.l   d0,a0                            ;source
-                    move.l  BlitPF,a1
-                    add.l   #NewGlyphTopLeft,a1                  ;destination
                     lea		CUSTOM,a5
 					btst	#14,DMACONR(a5)				  ;wait for the blitter
 .waitblitA			btst	#14,DMACONR(a5)
@@ -439,23 +425,17 @@ BlitGlyph:          lea     Font,a0
 					move.w	#$ffff,BLTALWM(a5)
 					move.l	#(USEA|USED|$f0)<<16,BLTCON0(a5) ;A -> D, copy mode
 					move.w	#((NGlyphs-1)*4),BLTAMOD(a5)
-					move.w	#((BPWidth-32)/8),BLTDMOD(a5)			
+					move.w	#((BPWidth-32)/8),BLTDMOD(a5)
+                    move.l  ViewPF,a1
+                    add.l   #NewGlyphTopLeft,a1                  ;destination			
 					move.l	a0,BLTAPTH(a5)                              ;source
 					move.l	a1,BLTDPTH(a5)                         ;destination						
 					move.w	#((32<<6)|(32/16)),BLTSIZE(a5)
-                    move.l  DrawPF,a1
-                    add.l   #NewGlyphTopLeft,a1
 					btst	#14,DMACONR(a5)				  ;wait for the blitter
 .waitblitB			btst	#14,DMACONR(a5)
 					bne.s	.waitblitB
-                    move.l	a0,BLTAPTH(a5)                              ;source
-					move.l	a1,BLTDPTH(a5)                         ;destination	
-                    move.w	#((32<<6)|(32/16)),BLTSIZE(a5)
-                    move.l  ViewPF,a1      ;not the cleanest thing in the world
+                    move.l  DrawPF,a1
                     add.l   #NewGlyphTopLeft,a1
-					btst	#14,DMACONR(a5)				  ;wait for the blitter
-.waitblitC			btst	#14,DMACONR(a5)
-					bne.s	.waitblitC
                     move.l	a0,BLTAPTH(a5)                              ;source
 					move.l	a1,BLTDPTH(a5)                         ;destination	
                     move.w	#((32<<6)|(32/16)),BLTSIZE(a5)
@@ -467,18 +447,20 @@ ShiftScroll:        lea		CUSTOM,a5
 					bne.s	.waitblitA
                     move.l  ViewPF,a0
                     add.l   #BPSize,a0
+                    move.l  DrawPF,a1
+                    add.l   #BPSize,a1
 					move.w	#$ffff,BLTAFWM(a5)
 					move.w	#$ffff,BLTALWM(a5)
                     move.w	#0,BLTAMOD(a5)
 					move.w	#0,BLTDMOD(a5)
-                    move.w	#(USED|USEA|ASH1),BLTCON0(a5)
+                    move.w	#(USED|USEA|ASH2|$f0),BLTCON0(a5)
                     move.w	#DESC,BLTCON1(a5)			
 					move.l	a0,BLTAPTH(a5)                              ;source
-					move.l	a0,BLTDPTH(a5)                         ;destination						
+					move.l	a1,BLTDPTH(a5)                         ;destination						
 					move.w	#((32<<6)|(BPWidth/16)),BLTSIZE(a5)
                     rts
 
-Scroll:             andi.b  #31,ScrollCounter ;mod 32
+Scroll:             andi.b  #7,ScrollCounter ;mod 32
                     bne.s   .shift
                     cmpi.l  #ScrollmapEnd,ScrollmapPtr
                     bne.s   .nextChar
@@ -762,8 +744,6 @@ OldCopperlist       ds.l    1
 PalettePos          ds.l    1
 ViewPF              ds.l    1
 DrawPF              ds.l    1
-BlitPF              ds.l    1
-;Scrollmap           ds.l    1
 ScrollmapPtr        ds.l    1
                     ;mixed-length (structs)
                     CNOP    0,4
