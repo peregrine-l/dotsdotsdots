@@ -36,7 +36,8 @@ Sqrt22              EQU     $5a82 ;sqrt(2)/2 << 15
 Sqrt22Factor        EQU     15    ;scale of sqrt(2)/2
 
 NGlyphs             EQU     (26+10+7) ;26 letters, 10 digits, 7 symbols
-NewGlyphPos         EQU     (((BPWidth-32-1)/8)+(BPHeight-32-1)*(BPWidth/8))
+NewGlyphTopLeft     EQU     (((BPWidth-33)+(BPHeight-33)*BPWidth)/8)
+NewGlyphBottomRight EQU     (((BPWidth-1)+(BPHeight-1)*BPWidth)/8)
 ;;;;;;;;;;;;;;;;;;; END SYMBOLIC CONSTANTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN MACROS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -80,13 +81,14 @@ Setup:              bsr.w   SystemSetup
                     bset.b  #FadeInFlag,Flags       ;start by doing the fade in
 Mainloop:           btst.b  #VBFlag,Flags
                     beq.s   Mainloop
+                    bsr     Scroll
                     move.l  BlitPF,a0
                     bsr     ClearDots
+                    
                     btst.b  #FadeInFlag,Flags
                     beq.s   .FadeInDone
                     bsr     FadeIn
 .FadeInDone         bsr     TransformDots
-                    bsr     BlitGlyph
                     bsr     RollBuffers
                     bclr.b  #VBFlag,Flags
                     btst	#10,POTINP+CUSTOM               ;right mouse button
@@ -361,44 +363,41 @@ FadeIn:             lea     FadeCounter,a3
 
 ;;;;;;;;;;;;;;;;;;; BEGIN SCROLLTEXT ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
                     ;maps each character onto x-position in font sheet
-MapScrolltext:      ;move.l  #(MEMF_CHIP|MEMF_CLEAR),d1
-                    ;move.l  #(2*NGlyphs),d0               ;x-position is a word
-                    ;CALLSYS SysBase,AllocMem
-                    ;move.l  d0,Scrollmap                  ;permanent ptr to map
-                    ;move.l  d0,ScrollmapPtr        ;running ptr to current char
-                    lea     Scrolltext,a0          ;source, inc: byte
+MapScrolltext:      lea     Scrolltext,a0          ;source, inc: byte
                     lea     Scrollmap,a1
-                    ;move.l  d0,a1                  ;destination, inc: word
+                    move.l  a1,ScrollmapPtr
 .loop               clr.l   d0
                     move.b  (a0)+,d0
-                    beq.w   .exit                  ;char is NULL, loop is over
-                    cmpi.b  #32,d0                 ;' '
+                    bne.s   .notNull
+                    move.b  #4*43,(a1)+            ;arbitrary end of text value
+                    bra.w   .exit          
+.notNull            cmpi.b  #32,d0                 ;' '
                     bne.s   .notSpace
-                    move.w  #4*42,(a1)+
+                    move.b  #4*42,(a1)+
                     bra.s   .loop
 .notSpace           cmpi.b  #33,d0                 ;'!'
                     bne.s   .notBang
-                    move.w  #4*26,(a1)+            ;position in bytes
+                    move.b  #4*26,(a1)+            ;position in bytes
                     bra.s   .loop
 .notBang            cmpi.b  #44,d0                 ;','
                     bne.s   .notComma
-                    move.w  #4*41,(a1)+
+                    move.b  #4*41,(a1)+
                     bra.s   .loop
 .notComma           cmpi.b  #46,d0                 ;'.'
                     bne.s   .notPeriod
-                    move.w  #4*29,(a1)+
+                    move.b  #4*29,(a1)+
                     bra.s   .loop
 .notPeriod          cmpi.b  #47,d0                 ;'/'
                     bne.s   .notSlash
-                    move.w  #4*28,(a1)+
+                    move.b  #4*28,(a1)+
                     bra.s   .loop
 .notSlash           cmpi.b  #58,d0                 ;':'
                     bne.s   .notColon
-                    move.w  #4*40,(a1)+
+                    move.b  #4*40,(a1)+
                     bra.s   .loop
 .notColon           cmpi.b  #63,d0                 ;'?'
                     bne.s   .notQuestionMark
-                    move.w  #4*27,(a1)+
+                    move.b  #4*27,(a1)+
                     bra.s   .loop
 .notQuestionMark    cmpi.b  #48,d0                 ;'0'
                     bcs.s   .loop                  ;<'0', not alphanum
@@ -407,15 +406,15 @@ MapScrolltext:      ;move.l  #(MEMF_CHIP|MEMF_CLEAR),d1
                     subi.b  #48,d0                 ;numchar to #digit
                     addi.b  #30,d0                 ;digits' position
                     asl.w   #2,d0                  ;*4
-                    move.w  d0,(a1)+
+                    move.b  d0,(a1)+
                     bra.s   .loop
 .notDigit           cmpi.b  #65,d0                 ;'A'
-                    bcs.s   .loop                  ;<'A', not letter
+                    bcs.w   .loop                  ;<'A', not letter
                     cmpi.b  #90,d0                 ;'Z'
                     bhi.s   .notUppercaseLetter    ;>'Z', not uppercase letter
                     subi.b  #65,d0                 ;char to #char
                     asl.w   #2,d0                  ;*4
-                    move.w  d0,(a1)+
+                    move.b  d0,(a1)+
                     bra.w   .loop
 .notUppercaseLetter cmpi.b  #97,d0                 ;'a'
                     bcs.w   .loop                  ;<'a', not letter
@@ -423,29 +422,74 @@ MapScrolltext:      ;move.l  #(MEMF_CHIP|MEMF_CLEAR),d1
                     bhi.w   .loop                  ;>'z', not known char
                     subi.b  #97,d0                 ;char to #char
                     asl.w   #2,d0                  ;*4
-                    move.w  d0,(a1)+
+                    move.b  d0,(a1)+
                     bra.w   .loop
 .exit               rts
 
-BlitGlyph:          clr.l   d0
-                    lea     Scrollmap,a1
-                    move.w  (a1),d0
-                    lea     Font,a0
-                    add.l   d0,a0         ;source
+                    ;current glyphmap in d0, trashes a0-a1-a5
+BlitGlyph:          lea     Font,a0
+                    add.l   d0,a0                            ;source
                     move.l  BlitPF,a1
-                    add.l   #NewGlyphPos,a1 ;destination
+                    add.l   #NewGlyphTopLeft,a1                  ;destination
                     lea		CUSTOM,a5
-					btst	#14,DMACONR(a5)					 ;wait for the blit
+					btst	#14,DMACONR(a5)				  ;wait for the blitter
 .waitblitA			btst	#14,DMACONR(a5)
 					bne.s	.waitblitA
 					move.w	#$ffff,BLTAFWM(a5)				       ;clear masks
 					move.w	#$ffff,BLTALWM(a5)
 					move.l	#(USEA|USED|$f0)<<16,BLTCON0(a5) ;A -> D, copy mode
-					move.w	#((NGlyphs-1)*4),BLTAMOD(a5)            ;copy everything from source
+					move.w	#((NGlyphs-1)*4),BLTAMOD(a5)
 					move.w	#((BPWidth-32)/8),BLTDMOD(a5)			
 					move.l	a0,BLTAPTH(a5)                              ;source
 					move.l	a1,BLTDPTH(a5)                         ;destination						
-					move.w	#((32<<6)|(32/16)),BLTSIZE(a5)											
+					move.w	#((32<<6)|(32/16)),BLTSIZE(a5)
+                    move.l  DrawPF,a1
+                    add.l   #NewGlyphTopLeft,a1
+					btst	#14,DMACONR(a5)				  ;wait for the blitter
+.waitblitB			btst	#14,DMACONR(a5)
+					bne.s	.waitblitB
+                    move.l	a0,BLTAPTH(a5)                              ;source
+					move.l	a1,BLTDPTH(a5)                         ;destination	
+                    move.w	#((32<<6)|(32/16)),BLTSIZE(a5)
+                    move.l  ViewPF,a1      ;not the cleanest thing in the world
+                    add.l   #NewGlyphTopLeft,a1
+					btst	#14,DMACONR(a5)				  ;wait for the blitter
+.waitblitC			btst	#14,DMACONR(a5)
+					bne.s	.waitblitC
+                    move.l	a0,BLTAPTH(a5)                              ;source
+					move.l	a1,BLTDPTH(a5)                         ;destination	
+                    move.w	#((32<<6)|(32/16)),BLTSIZE(a5)
+                    rts
+
+ShiftScroll:        lea		CUSTOM,a5
+					btst	#14,DMACONR(a5)
+.waitblitA			btst	#14,DMACONR(a5)
+					bne.s	.waitblitA
+                    move.l  ViewPF,a0
+                    add.l   #BPSize,a0
+					move.w	#$ffff,BLTAFWM(a5)
+					move.w	#$ffff,BLTALWM(a5)
+                    move.w	#0,BLTAMOD(a5)
+					move.w	#0,BLTDMOD(a5)
+                    move.w	#(USED|USEA|ASH1),BLTCON0(a5)
+                    move.w	#DESC,BLTCON1(a5)			
+					move.l	a0,BLTAPTH(a5)                              ;source
+					move.l	a0,BLTDPTH(a5)                         ;destination						
+					move.w	#((32<<6)|(BPWidth/16)),BLTSIZE(a5)
+                    rts
+
+Scroll:             andi.b  #31,ScrollCounter ;mod 32
+                    bne.s   .shift
+                    cmpi.l  #ScrollmapEnd,ScrollmapPtr
+                    bne.s   .nextChar
+                    move.l  #Scrollmap,ScrollmapPtr
+.nextChar           move.l  ScrollmapPtr,a0
+                    clr.l   d0
+                    move.b  (a0),d0
+                    bsr     BlitGlyph
+                    add.l   #1,ScrollmapPtr
+.shift              bsr     ShiftScroll
+                    add.b   #1,ScrollCounter
                     rts
 ;;;;;;;;;;;;;;;;;;; END SCROLLTEXT ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -684,9 +728,11 @@ VBlankIntHandler:   ;movem.l d1-d7/a2-a6,-(sp)      ;sets a1 and returns a0, d0
 VBlankIntName       dc.b    "main.interrupts.vblank",0
 GfxLibName          dc.b    "graphics.library",0
 Scrolltext          include "scrolltext.i"
+Scrollmap           ds.b    Scrollmap-Scrolltext
+ScrollmapEnd
+ScrollCounter       dc.b    0
 ErrNo               dc.b    0
 FadeCounter         dc.b    0
-ScrollCounter       dc.b    0
                     ;word-length
                     CNOP    0,2
 MusicData           incbin  "dots5.lsmusic"
@@ -697,7 +743,6 @@ OldINTREQ           ds.l    1
 OldADKCON           ds.l    1
                     ;word-length arrays
 Palette             dc.w    $614,$fff,$fae,$a45,$d79,$ff0,$a91,$431
-Scrollmap           ds.w    (NGlyphs*2)
                     ;ZXY order
 Sphere              ds.w    N*3
 Cube                ds.w    N*3
@@ -719,7 +764,7 @@ ViewPF              ds.l    1
 DrawPF              ds.l    1
 BlitPF              ds.l    1
 ;Scrollmap           ds.l    1
-;ScrollmapPtr        ds.l    1
+ScrollmapPtr        ds.l    1
                     ;mixed-length (structs)
                     CNOP    0,4
 VBlankIntData       ;data shared with interrupt handler
