@@ -1,6 +1,6 @@
 # Dots Dots Dots
 
-This is 19K a dots effect for the Commodore Amiga 500 (OCS) vintage computer,
+This is a 19K dots effect for the Commodore Amiga 500 (OCS) vintage computer,
 written by
 [Peregrine](https://demozoo.org/sceners/122747/)/Delicious Amigans
 in July-August 2024.
