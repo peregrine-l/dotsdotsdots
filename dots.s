@@ -1,43 +1,51 @@
+;title: Dots Dots Dots
+;category: lame debutro (19K once Shrinkled) for the Amiga 500
+;authors: Peregrine/Delicious Amigans, with gfx by Yogib33r and music by YV2149
+;date: 2024-07-14 (for Evoke 2024)
+;toolchain: VSCode+Amiga assembly+vasm+vlink+UAE, plus LSPlayer and Shrinkler
+
                     INCDIR  "include"
                     INCLUDE "hardware.i"
                     INCLUDE "system.i"
                     INCLUDE "dos/dosextens.i"
 
 ;;;;;;;;;;;;;;;;;;; BEGIN SYMBOLIC CONSTANTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-BPWidth             EQU     320
+BPWidth             EQU     (320+32)        ;extra 32 pixels for the scrolltext
 BPHeight            EQU     256
 Depth               EQU     3
-WWidth              EQU     (BPWidth-80)
-WHeight             EQU     (BPHeight-40)
-HOffset             EQU     80
+WWidth              EQU     (BPWidth-80)                 ;dots window width
+WHeight             EQU     (BPHeight-40)                ;dots window height
+HOffset             EQU     80                           ;dots window placement
 VOffset             EQU     0
-
 BPSize              EQU     (BPWidth*BPHeight/8)
 PFSize              EQU     (BPSize*Depth)
 XStart              EQU     $81
-XStop               EQU     (XStart+BPWidth)
+XStop               EQU     (XStart+BPWidth-32)
 YStart              EQU     $2c
 YStop               EQU     (YStart+BPHeight)
 OurDIWSTRT          EQU     ((YStart<<8)|XStart)
 OurDIWSTOP          EQU     (((YStop-256)<<8)|(XStop-256))
 OurDDFSTRT          EQU     $38
 OurDDFSTOP          EQU     $d0
-VBFlag              EQU     0
-FadeInFlag          EQU     1
+VBFlag              EQU     0              ;one (or several...) VBlank happened
+FadeInFlag          EQU     1              ;active fade in
+PFOrder             EQU     2              ;switched every frame, unused
 
-QuantizedTau        EQU     1024  ;degrees in 2*Pi radians
-MaxDepth            EQU     512   ;world depth from screen
-N                   EQU     256   ;number of dots
-Radius              EQU     152   ;radius of sphere
-SineLUTFactor       EQU     14    ;scale of sine table
-ProjLUTFactor       EQU     15    ;scale of 3D projection table
-LerpLUTFactor       EQU     15    ;scale of interpolation table
-Sqrt22              EQU     $5a82 ;sqrt(2)/2 << 15
-Sqrt22Factor        EQU     15    ;scale of sqrt(2)/2
+;3D dots
+QuantizedTau        EQU     1024           ;degrees in 2*Pi radians
+MaxDepth            EQU     512            ;world depth from screen
+N                   EQU     256            ;number of dots
+Radius              EQU     152            ;radius of sphere
+SineLUTFactor       EQU     14             ;scale of sine table
+ProjLUTFactor       EQU     15             ;scale of 3D projection table
+LerpLUTFactor       EQU     15             ;scale of interpolation table
+Sqrt22              EQU     $5a82          ;sqrt(2)/2 << 15
+Sqrt22Factor        EQU     15             ;scale of sqrt(2)/2
 
-NGlyphs             EQU     (26+10+7) ;26 letters, 10 digits, 7 symbols
+;Scrolltext
+NGlyphs             EQU     (26+10+7)      ;26 letters, 10 digits, 7 symbols
 NewGlyphTopLeft     EQU     (((BPWidth-32)+(BPHeight-32)*BPWidth)/8)
-NewGlyphBottomRight EQU     (((BPWidth)+(BPHeight)*BPWidth)/8)
+NewGlyphBottomRight EQU     (((32/4)-2)+BPHeight*(BPWidth/8))
 ;;;;;;;;;;;;;;;;;;; END SYMBOLIC CONSTANTS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN MACROS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -70,6 +78,11 @@ CMOVEP              MACRO ;CMOVEPTR <ptr>,<#reg name+num>,<aX CL ptr> [8 bytes]
                     move.w  #\2PTH,(\3)+
                     move.w  d7,(\3)+
                     ENDM
+WAITBLIT            MACRO ;a5 points to CUSTOM
+                    btst    #14,DMACONR(a5)        ;wait for the Blitter, twice
+.\@                 btst    #14,DMACONR(a5)
+                    bne.s   .\@
+                    ENDM
 ;;;;;;;;;;;;;;;;;;; END MACROS ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN MAIN ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -81,18 +94,20 @@ Setup:              bsr.w   SystemSetup
                     bset.b  #FadeInFlag,Flags       ;start by doing the fade in
 Mainloop:           btst.b  #VBFlag,Flags
                     beq.s   Mainloop
-                    move.l  DrawPF,a0
-                    bsr     ClearDots    
+                    bsr     TrailDots
+                    bsr     TransformDots
                     btst.b  #FadeInFlag,Flags
                     beq.s   .if
                     bsr     FadeIn
                     bra.s   .endif
 .if                 bsr     Scroll
-.endif              bsr     TransformDots
-                    bsr     RollBuffers
+.endif              bsr     RollBuffers
                     bclr.b  #VBFlag,Flags
                     btst	#10,POTINP+CUSTOM               ;right mouse button
-                    bne.s   Mainloop 
+                    beq.s   Cleanup
+                    btst	#FIR0,CIAA+CIAAPRA				;left mouse button
+                    beq.s   Cleanup
+                    bra.s   Mainloop
 Cleanup:            bsr     DemoCleanup
                     bsr     SystemCleanup
 Exit:               movem.l (sp)+,d1-d7/a0-a6
@@ -101,7 +116,8 @@ Exit:               movem.l (sp)+,d1-d7/a0-a6
 ;;;;;;;;;;;;;;;;;;; END MAIN ROUTINE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN DOUBLE BUFFERING ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;
-RollBuffers:        move.l  ViewPF,a0
+RollBuffers:        bchg.b  #PFOrder,Flags
+                    move.l  ViewPF,a0
                     move.l  DrawPF,a1
                     move.l  a0,DrawPF
                     move.l  a1,ViewPF
@@ -238,8 +254,8 @@ SysConfig:          move.w  #(CUSTOMCLR|COPEN|BPLEN|BLTEN|SPREN),DMACON(a5)
                     move.w  #(BPU1|BPU0|COLOR),BPLCON0(a5)          ;3 bitplanes
 					move.w	#0,BPLCON3(a5)		                    ;no AGA/ECS
 					move.w	#0,FMODE(a5)                            ;ditto
-					move.w	#0,BPL1MOD(a5)
-					move.w	#0,BPL2MOD(a5)
+					move.w	#4,BPL1MOD(a5)
+					move.w	#4,BPL2MOD(a5)
                     move.w	#OurDIWSTRT,DIWSTRT(a5)
 					move.w	#OurDIWSTOP,DIWSTOP(a5)
 					move.w	#OurDDFSTRT,DDFSTRT(a5)
@@ -270,14 +286,15 @@ DemoCleanup:        bsr     LSP_MusicDriver_CIA_Stop
                     move.l  ViewPF,a1
                     move.w  #PFSize,d0
                     JUMPSYS FreeMem
+                    move.l  PlotDotLUT,a1
+                    move.w  #(BPHeight*2),d0
+                    JUMPSYS FreeMem
                     rts
 ;;;;;;;;;;;;;;;;;;; END CLEANUP ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN BITPLANE PREP ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 BlitLogo:           lea		CUSTOM,a5
-					btst	#14,DMACONR(a5)					 ;wait for the blit
-.waitblitA			btst	#14,DMACONR(a5)
-					bne.s	.waitblitA
+                    WAITBLIT
 					move.w	#$ffff,BLTAFWM(a5)				       ;clear masks
 					move.w	#$ffff,BLTALWM(a5)
 					move.l	#(USEA|USED|$f0)<<16,BLTCON0(a5) ;A -> D, copy mode
@@ -285,9 +302,7 @@ BlitLogo:           lea		CUSTOM,a5
 					move.w	#((BPWidth-80)/8),BLTDMOD(a5)			
                     lea     Logo,a1                              
                     moveq   #(Depth-1),d7
-.loop				btst	#14,DMACONR(a5)	 ;TODO: put wait in the end of loop
-.waitblitB			btst	#14,DMACONR(a5)
-					bne.s	.waitblitB
+.loop				WAITBLIT
 					move.l	a1,BLTAPTH(a5)                              ;source
 					move.l	a0,BLTDPTH(a5)                         ;destination						
 					move.w	#((215<<6)|(80/16)),BLTSIZE(a5)		
@@ -295,16 +310,33 @@ BlitLogo:           lea		CUSTOM,a5
 					add.l	#BPSize,a0										
 					dbf		d7,.loop
 
-ClearDots:          ;a0: bitplane address
+ClearDots:          move.l  DrawPF,a0
                     lea     CUSTOM,a5
-                    btst    #14,DMACONR(a5)        ;wait for the Blitter, twice
-.waitBlitter        btst    #14,DMACONR(a5)
-                    bne.s   .waitBlitter
+                    WAITBLIT
                     move.l  #USED<<16,BLTCON0(a5)  ;clear mode
                     move.w  #((BPWidth-WWidth)/8),BLTDMOD(a5)
                     add.l   #(HOffset/8),a0
                     move.l  a0,BLTDPTH(a5)
                     move.w  #((WHeight<<6)|(WWidth/16)),BLTSIZE(a5) ;in words
+                    rts
+
+TrailDots:          ;copy old dots to second bitplane
+                    move.l  ViewPF,a0
+                    add.l   #(HOffset/8),a0 ;ViewPF, BP0, dots window
+                    move.l  DrawPF,a1
+                    add.l   #BPSize,a1
+                    add.l   #(HOffset/8),a1 ;DrawPF, BP1, dots window
+                    lea		CUSTOM,a5
+                    WAITBLIT
+					move.w	#$ffff,BLTAFWM(a5)				       ;clear masks
+					move.w	#$ffff,BLTALWM(a5)
+					move.l	#(USEA|USED|$f0)<<16,BLTCON0(a5) ;A -> D, copy mode
+					move.w	#((BPWidth-WWidth)/8),BLTAMOD(a5)            
+					move.w	#((BPWidth-WWidth)/8),BLTDMOD(a5)
+                    move.l  a0,BLTAPTH(a5)
+                    move.l  a1,BLTDPTH(a5)
+                    move.w	#((WHeight<<6)|(WWidth/16)),BLTSIZE(a5)
+                    bsr     ClearDots ;clear DrawPF, BP0, dots window
                     rts
 ;;;;;;;;;;;;;;;;;;; END BITPLANE PREP ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -418,9 +450,7 @@ MapScrolltext:      lea     Scrolltext,a0          ;source, inc: byte
 BlitGlyph:          lea     Font,a0
                     add.l   d0,a0                            ;source
                     lea		CUSTOM,a5
-					btst	#14,DMACONR(a5)				  ;wait for the blitter
-.waitblitA			btst	#14,DMACONR(a5)
-					bne.s	.waitblitA
+                    WAITBLIT
 					move.w	#$ffff,BLTAFWM(a5)				       ;clear masks
 					move.w	#$ffff,BLTALWM(a5)
 					move.l	#(USEA|USED|$f0)<<16,BLTCON0(a5) ;A -> D, copy mode
@@ -431,9 +461,7 @@ BlitGlyph:          lea     Font,a0
 					move.l	a0,BLTAPTH(a5)                              ;source
 					move.l	a1,BLTDPTH(a5)                         ;destination						
 					move.w	#((32<<6)|(32/16)),BLTSIZE(a5)
-					btst	#14,DMACONR(a5)				  ;wait for the blitter
-.waitblitB			btst	#14,DMACONR(a5)
-					bne.s	.waitblitB
+                    WAITBLIT
                     move.l  DrawPF,a1
                     add.l   #NewGlyphTopLeft,a1
                     move.l	a0,BLTAPTH(a5)                              ;source
@@ -442,27 +470,25 @@ BlitGlyph:          lea     Font,a0
                     rts
 
 ShiftScroll:        lea		CUSTOM,a5
-					btst	#14,DMACONR(a5)
-.waitblitA			btst	#14,DMACONR(a5)
-					bne.s	.waitblitA
+                    WAITBLIT
                     move.l  ViewPF,a0
-                    add.l   #BPSize,a0
+                    add.l   #NewGlyphBottomRight,a0
                     move.l  DrawPF,a1
-                    add.l   #BPSize,a1
+                    add.l   #NewGlyphBottomRight,a1
 					move.w	#$ffff,BLTAFWM(a5)
 					move.w	#$ffff,BLTALWM(a5)
                     move.w	#0,BLTAMOD(a5)
 					move.w	#0,BLTDMOD(a5)
-                    move.w	#(USED|USEA|ASH2|$f0),BLTCON0(a5)
+                    move.w	#(USED|USEA|ASH3|$f0),BLTCON0(a5)
                     move.w	#DESC,BLTCON1(a5)			
 					move.l	a0,BLTAPTH(a5)                              ;source
 					move.l	a1,BLTDPTH(a5)                         ;destination						
 					move.w	#((32<<6)|(BPWidth/16)),BLTSIZE(a5)
                     rts
 
-Scroll:             andi.b  #7,ScrollCounter ;mod 32
+Scroll:             andi.b  #3,ScrollCounter ;modulo 2^n
                     bne.s   .shift
-                    cmpi.l  #ScrollmapEnd,ScrollmapPtr
+                    cmpi.l  #ScrollmapEnd-1,ScrollmapPtr
                     bne.s   .nextChar
                     move.l  #Scrollmap,ScrollmapPtr
 .nextChar           move.l  ScrollmapPtr,a0
@@ -476,7 +502,11 @@ Scroll:             andi.b  #7,ScrollCounter ;mod 32
 ;;;;;;;;;;;;;;;;;;; END SCROLLTEXT ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;; BEGIN DOTS ROUTINES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-CalcPlotDotLUT:     lea     PlotDotLUT,a0
+CalcPlotDotLUT:     move.l  #(MEMF_CHIP|MEMF_CLEAR),d1 ;AllocMem trashes d1
+                    move.l  #(BPHeight*2),d0
+                    CALLSYS SysBase,AllocMem
+                    move.l  d0,PlotDotLUT
+                    move.l  d0,a0
                     move.l  #((VOffset*BPWidth+HOffset)/8),d0
                     move.l  #(BPHeight-1),d7
 .loopPlotDot        move.w  d0,(a0)+
@@ -601,7 +631,7 @@ InterpolationT:     asr.l   #2,d0
                     lea     LerpLUT,a0          
                     move.w  (a0,d0.w),-(sp)      ;push it on the stack
 
-                    lea     PlotDotLUT,a0
+                    move.l  PlotDotLUT,a0
                     move.l  DrawPF,a1
                     lea     ProjLUT,a2
                     lea     Sphere,a3
@@ -710,7 +740,7 @@ VBlankIntHandler:   ;movem.l d1-d7/a2-a6,-(sp)      ;sets a1 and returns a0, d0
 VBlankIntName       dc.b    "main.interrupts.vblank",0
 GfxLibName          dc.b    "graphics.library",0
 Scrolltext          include "scrolltext.i"
-Scrollmap           ds.b    Scrollmap-Scrolltext
+Scrollmap           ds.b    Scrollmap-Scrolltext ;could be dynamically alloc'ed
 ScrollmapEnd
 ScrollCounter       dc.b    0
 ErrNo               dc.b    0
@@ -719,23 +749,22 @@ FadeCounter         dc.b    0
                     CNOP    0,2
 MusicData           incbin  "dots5.lsmusic"
                     CNOP    0,2
-OldDMACON           ds.l    1
-OldINTENA           ds.l    1
-OldINTREQ           ds.l    1
-OldADKCON           ds.l    1
+OldDMACON           ds.w    1
+OldINTENA           ds.w    1
+OldINTREQ           ds.w    1
+OldADKCON           ds.w    1
                     ;word-length arrays
 Palette             dc.w    $614,$fff,$fae,$a45,$d79,$ff0,$a91,$431
-                    ;ZXY order
+                    ;point coordinates, ZXY order
 Sphere              ds.w    N*3
 Cube                ds.w    N*3
                     ;word-length LUTs
-PlotDotLUT          ds.w    (2*BPHeight)
 AzimuthLUT          include "azimuth_lut.i"
 InclineLUT          include "incline_lut.i"
 SineLUT             include "sine_lut.i"
 ProjLUT             include "proj_lut.i"
 LerpLUT             include "lerp_lut.i"
-                    ;long-length
+                    ;long-length, pointers
                     CNOP    0,4
 WBMessage           dc.l    0
 GfxLibBase          ds.l    1
@@ -745,6 +774,7 @@ PalettePos          ds.l    1
 ViewPF              ds.l    1
 DrawPF              ds.l    1
 ScrollmapPtr        ds.l    1
+PlotDotLUT          ds.l    1
                     ;mixed-length (structs)
                     CNOP    0,4
 VBlankIntData       ;data shared with interrupt handler
@@ -767,5 +797,5 @@ Logo                incbin  "logo.raw"
                     CNOP    0,4
 SoundBank           incbin  "dots5.lsbank"
                     CNOP    0,4
-Copperlist          ds.b    128                       ;should be enough for now
+Copperlist          ds.b    76
 ;;;;;;;;;;;;;;;;;;; END STATIC DATA ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
