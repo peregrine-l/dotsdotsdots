@@ -13,7 +13,8 @@ the music was composed by
 [Leonard](https://demozoo.org/sceners/2527/)/Oxygene.
 
 It is written in Motorola 68000 assembly, assembled and linked with
-vasm and vlink by [Volker Barthelmann](http://www.compilers.de/vasm.html),
+vasm and vlink by [Volker Barthelmann](http://www.compilers.de/vasm.html) and 
+[Frank Wille](http://sun.hasenbraten.de/~frank/),
 with the VSCode editor and its
 [Amiga Assembly](https://github.com/prb28/vscode-amiga-assembly) extension
 by prb28, compressed by
