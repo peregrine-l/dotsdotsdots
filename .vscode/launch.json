@@ -16,7 +16,8 @@
                 "--automatic_input_grab=0",
                 "--floppy_drive_volume=0"
             ],
-            "preLaunchTask": "amigaassembly: build"
+            //"preLaunchTask": "amigaassembly: build",
+            "preLaunchTask": "amigaassembly: create ADF"
         },
         {
             "type": "amiga-assembly",
@@ -34,7 +35,8 @@
                 "-s",
                 "filesystem=rw,dh0:${workspaceFolder}/uae/dh0",
             ],
-            "preLaunchTask": "amigaassembly: build"
+            //"preLaunchTask": "amigaassembly: build",
+            "preLaunchTask": "amigaassembly: create ADF"
         }
     ]
 }

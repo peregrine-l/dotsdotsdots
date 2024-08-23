@@ -94,7 +94,8 @@ Setup:              bsr.w   SystemSetup
                     bset.b  #FadeInFlag,Flags       ;start by doing the fade in
 Mainloop:           btst.b  #VBFlag,Flags
                     beq.s   Mainloop
-                    bsr     TrailDots
+                    ;bsr     TrailDots
+                    bsr     ClearDots
                     bsr     TransformDots
                     btst.b  #FadeInFlag,Flags
                     beq.s   .if
@@ -309,6 +310,7 @@ BlitLogo:           lea		CUSTOM,a5
 					add.l	#(215*(80/8)),a1 ;height (in px) * width (in bytes)
 					add.l	#BPSize,a0										
 					dbf		d7,.loop
+                    rts
 
 ClearDots:          move.l  DrawPF,a0
                     lea     CUSTOM,a5

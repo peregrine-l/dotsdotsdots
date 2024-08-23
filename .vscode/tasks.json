@@ -17,7 +17,7 @@
 				"command": "${config:amiga-assembly.binDir}/vlink",
 				"includes": "*.s",
 				"excludes": "*.md",
-				"exefilename": "../uae/dh0/dots",
+				"exefilename": "../uae/dh0/dotsdotsdots",
 				"entrypoint": "dots.s",
 				"args": [
 					"-bamigahunk",
@@ -31,6 +31,24 @@
 				"kind": "build",
 				"isDefault": true
 			}
+		},
+        {
+			"type": "amigaassembly",
+			"adfgenerator": {
+				"ADFToolsParentDir": "${config:amiga-assembly.binDir}",
+				"sourceRootDir": "uae/dh0",
+				"outputADFFile": "./build/dotsdotsdots.adf",
+				"includes": "**/*",
+				"excludes": "**/.*",
+				"adfCreateOptions": [
+					"--label=DotsDotsDots"
+				]
+			},
+			"problemMatcher": [],
+			"label": "amigaassembly: create ADF",
+            "dependsOn": [
+			    //s"amigaassembly: build"
+		    ]
 		}
 	]
 }
